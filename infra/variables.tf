@@ -14,3 +14,15 @@ variable "location" {
   type        = string
   default     = "swedencentral"
 }
+
+variable "mcp_api_key" {
+  description = "API key to protect the MCP server endpoint"
+  type        = string
+  sensitive   = true
+}
+
+variable "mcp_server_image" {
+  description = "Docker image for the MCP server (default uses ACR built during deployment)"
+  type        = string
+  default     = ""
+}

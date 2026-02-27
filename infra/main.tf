@@ -174,3 +174,130 @@ resource "azurerm_role_assignment" "deployer_openai_user" {
   principal_id         = data.azurerm_client_config.current.object_id
   principal_type       = "User"
 }
+
+# ---------- MI needs Contributor on RG for az CLI operations ----------
+resource "azurerm_role_assignment" "mi_rg_contributor" {
+  scope                = azurerm_resource_group.main.id
+  role_definition_name = "Contributor"
+  principal_id         = azurerm_user_assigned_identity.apps.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# ---------- MI needs Reader at subscription level for az account set ----------
+resource "azurerm_role_assignment" "mi_sub_reader" {
+  scope                = "/subscriptions/${var.subscription_id}"
+  role_definition_name = "Reader"
+  principal_id         = azurerm_user_assigned_identity.apps.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# ---------- MCP Server Container App ----------
+resource "azurerm_container_app" "mcp_server" {
+  name                         = "mcp-api-mock-gen"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  resource_group_name          = azurerm_resource_group.main.name
+  revision_mode                = "Single"
+  tags                         = local.tags
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.apps.id]
+  }
+
+  registry {
+    server   = azurerm_container_registry.main.login_server
+    identity = azurerm_user_assigned_identity.apps.id
+  }
+
+  ingress {
+    external_enabled = true
+    target_port      = 8000
+    transport        = "auto"
+
+    traffic_weight {
+      latest_revision = true
+      percentage      = 100
+    }
+  }
+
+  template {
+    min_replicas = 0
+    max_replicas = 1
+
+    container {
+      name   = "mcp-server"
+      image  = var.mcp_server_image != "" ? var.mcp_server_image : "${azurerm_container_registry.main.login_server}/mcp-api-mock-gen:latest"
+      cpu    = 2
+      memory = "4Gi"
+
+      env {
+        name  = "AZURE_SUBSCRIPTION_ID"
+        value = var.subscription_id
+      }
+      env {
+        name  = "AZURE_RESOURCE_GROUP"
+        value = azurerm_resource_group.main.name
+      }
+      env {
+        name  = "AZURE_LOCATION"
+        value = var.location
+      }
+      env {
+        name  = "COSMOS_ACCOUNT_NAME"
+        value = azurerm_cosmosdb_account.main.name
+      }
+      env {
+        name  = "COSMOS_ENDPOINT"
+        value = azurerm_cosmosdb_account.main.endpoint
+      }
+      env {
+        name  = "ACR_NAME"
+        value = azurerm_container_registry.main.name
+      }
+      env {
+        name  = "ACR_LOGIN_SERVER"
+        value = azurerm_container_registry.main.login_server
+      }
+      env {
+        name  = "ACA_ENVIRONMENT_NAME"
+        value = azurerm_container_app_environment.main.name
+      }
+      env {
+        name  = "MANAGED_IDENTITY_ID"
+        value = azurerm_user_assigned_identity.apps.id
+      }
+      env {
+        name  = "MANAGED_IDENTITY_CLIENT_ID"
+        value = azurerm_user_assigned_identity.apps.client_id
+      }
+      env {
+        name  = "AZURE_OPENAI_ENDPOINT"
+        value = azurerm_cognitive_account.foundry.endpoint
+      }
+      env {
+        name  = "CODEX_MODEL"
+        value = azurerm_cognitive_deployment.codex.name
+      }
+      env {
+        name  = "AZURE_CLIENT_ID"
+        value = azurerm_user_assigned_identity.apps.client_id
+      }
+      env {
+        name        = "MCP_API_KEY"
+        secret_name = "mcp-api-key"
+      }
+    }
+  }
+
+  secret {
+    name  = "mcp-api-key"
+    value = var.mcp_api_key
+  }
+
+  depends_on = [
+    azurerm_cosmosdb_sql_role_assignment.apps_mi,
+    azurerm_role_assignment.mi_acr_pull,
+    azurerm_role_assignment.mi_openai_user,
+    azurerm_role_assignment.mi_rg_contributor,
+  ]
+}

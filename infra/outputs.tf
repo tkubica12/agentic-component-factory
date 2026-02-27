@@ -53,3 +53,7 @@ output "foundry_endpoint" {
 output "foundry_name" {
   value = azurerm_cognitive_account.foundry.name
 }
+
+output "mcp_endpoint" {
+  value = "https://${azurerm_container_app.mcp_server.ingress[0].fqdn}/mcp"
+}
