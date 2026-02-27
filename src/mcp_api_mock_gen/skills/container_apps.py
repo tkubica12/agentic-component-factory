@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 
 logger = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 def _az(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     cmd = ["az"] + args + ["--output", "json"]
     logger.info("az %s", " ".join(args[:10]))
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, shell=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, shell=(os.name == "nt"))
     if check and result.returncode != 0:
         raise RuntimeError(f"az command failed: {result.stderr}")
     return result

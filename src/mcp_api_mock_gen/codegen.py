@@ -26,6 +26,23 @@ from .skills.scripts import ScriptSkills
 
 logger = logging.getLogger(__name__)
 
+
+def _get_azure_bearer_token(client_id: str | None = None) -> str:
+    """Get an Azure bearer token for Cognitive Services using MI or CLI credential."""
+    from azure.identity import ManagedIdentityCredential, AzureCliCredential
+    scope = "https://cognitiveservices.azure.com/.default"
+    try:
+        if client_id:
+            cred = ManagedIdentityCredential(client_id=client_id)
+        else:
+            cred = AzureCliCredential()
+        token = cred.get_token(scope)
+        return token.token
+    except Exception:
+        cred = AzureCliCredential()
+        token = cred.get_token(scope)
+        return token.token
+
 SYSTEM_PROMPT_BASE = """You are a code generation agent that creates CRUD REST APIs packaged as Docker containers.
 You will be given a resource name, its schema, and sample records.
 
@@ -330,8 +347,19 @@ async def run_codegen(
             etype = event.type.value if hasattr(event.type, "value") else event.type
             logger.info("Copilot event: %s", etype)
 
+        # Use Azure BYOK provider — works without GitHub auth
+        bearer_token = _get_azure_bearer_token(
+            client_id=os.environ.get("AZURE_CLIENT_ID") or settings.managed_identity_client_id
+        )
         session = await client.create_session({
-            "model": "gpt-4.1",
+            "model": settings.codex_model,
+            "provider": {
+                "type": "azure",
+                "base_url": settings.azure_openai_endpoint.rstrip("/"),
+                "bearer_token": bearer_token,
+                "wire_api": "responses",
+                "azure": {"api_version": "2025-03-01-preview"},
+            },
             "system_message": {"mode": "append", "content": system_prompt},
             "working_directory": work_dir,
             "on_permission_request": _auto_approve,

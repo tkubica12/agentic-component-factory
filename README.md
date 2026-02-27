@@ -156,6 +156,12 @@ uv run python tests/test_client.py
 
 This connects to the MCP server in-process via FastMCP Client and calls `create_mock_api` with sample product data.
 
+### Tesst client (streamable http)
+
+```bash
+uv run python tests/test_remote.py
+```
+
 ## MCP tool contracts
 
 ### `create_mock_api`

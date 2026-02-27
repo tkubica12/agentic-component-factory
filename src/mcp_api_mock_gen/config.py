@@ -19,6 +19,7 @@ class Settings:
     managed_identity_id: str
     managed_identity_client_id: str
     azure_openai_endpoint: str
+    codex_model: str = "gpt-53-codex"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -40,4 +41,5 @@ class Settings:
             managed_identity_id=_require("MANAGED_IDENTITY_ID"),
             managed_identity_client_id=_require("MANAGED_IDENTITY_CLIENT_ID"),
             azure_openai_endpoint=_require("AZURE_OPENAI_ENDPOINT"),
+            codex_model=os.environ.get("CODEX_MODEL", "gpt-53-codex"),
         )

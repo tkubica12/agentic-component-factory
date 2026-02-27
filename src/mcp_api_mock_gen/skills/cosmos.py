@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 from typing import Any
 
@@ -21,7 +22,11 @@ def _az(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     """Run an Azure CLI command and return the result."""
     cmd = ["az"] + args + ["--output", "json"]
     logger.info("az %s", " ".join(args))
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, shell=True)
+    result = subprocess.run(
+        " ".join(cmd) if os.name == "nt" else cmd,
+        capture_output=True, text=True, timeout=120,
+        shell=(os.name == "nt"),
+    )
     if check and result.returncode != 0:
         raise RuntimeError(f"az {' '.join(args)} failed: {result.stderr}")
     return result
@@ -39,7 +44,12 @@ class CosmosSkills:
 
     def _ensure_client(self) -> CosmosClient:
         if self._client is None:
-            credential = AzureCliCredential()
+            client_id = os.environ.get("AZURE_CLIENT_ID")
+            if client_id:
+                from azure.identity import ManagedIdentityCredential
+                credential = ManagedIdentityCredential(client_id=client_id)
+            else:
+                credential = AzureCliCredential()
             self._client = CosmosClient(self.endpoint, credential=credential)
         return self._client
 

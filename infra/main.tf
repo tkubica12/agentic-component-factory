@@ -125,3 +125,52 @@ resource "azurerm_role_assignment" "deployer_acr_push" {
   principal_id         = data.azurerm_client_config.current.object_id
   principal_type       = "User"
 }
+
+# ---------- AI Foundry (Cognitive Services) ----------
+resource "azurerm_cognitive_account" "foundry" {
+  name                          = "ai-mcpmock-${local.suffix}"
+  location                      = azurerm_resource_group.main.location
+  resource_group_name           = azurerm_resource_group.main.name
+  kind                          = "AIServices"
+  sku_name                      = "S0"
+  custom_subdomain_name         = "ai-mcpmock-${local.suffix}"
+  local_auth_enabled            = false
+  public_network_access_enabled = true
+  tags                          = local.tags
+
+  identity {
+    type = "SystemAssigned"
+  }
+}
+
+resource "azurerm_cognitive_deployment" "codex" {
+  name                 = "gpt-53-codex"
+  cognitive_account_id = azurerm_cognitive_account.foundry.id
+
+  model {
+    format  = "OpenAI"
+    name    = "gpt-5.3-codex"
+    version = "2026-02-24"
+  }
+
+  sku {
+    name     = "GlobalStandard"
+    capacity = 500
+  }
+}
+
+# ---------- AI Foundry RBAC: user-assigned MI (Cognitive Services OpenAI User) ----------
+resource "azurerm_role_assignment" "mi_openai_user" {
+  scope                = azurerm_cognitive_account.foundry.id
+  role_definition_name = "Cognitive Services OpenAI User"
+  principal_id         = azurerm_user_assigned_identity.apps.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# ---------- AI Foundry RBAC: current user ----------
+resource "azurerm_role_assignment" "deployer_openai_user" {
+  scope                = azurerm_cognitive_account.foundry.id
+  role_definition_name = "Cognitive Services OpenAI User"
+  principal_id         = data.azurerm_client_config.current.object_id
+  principal_type       = "User"
+}

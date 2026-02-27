@@ -45,3 +45,11 @@ output "aca_environment_id" {
 output "suffix" {
   value = local.suffix
 }
+
+output "foundry_endpoint" {
+  value = azurerm_cognitive_account.foundry.endpoint
+}
+
+output "foundry_name" {
+  value = azurerm_cognitive_account.foundry.name
+}

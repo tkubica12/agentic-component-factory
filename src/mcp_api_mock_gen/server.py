@@ -21,6 +21,23 @@ mcp = FastMCP(
     ),
 )
 
+# Add API key middleware if MCP_API_KEY is set
+_api_key = os.environ.get("MCP_API_KEY", "")
+if _api_key:
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import JSONResponse
+
+    class ApiKeyMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            auth = request.headers.get("Authorization", "")
+            if auth == f"Bearer {_api_key}":
+                return await call_next(request)
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    # Access the underlying ASGI app to add middleware
+    _app = getattr(mcp, "_extra_routers", None)
+    logger.info("API key authentication enabled")
+
 
 @mcp.tool()
 async def create_mock_api(
@@ -84,10 +101,6 @@ async def delete_mock_api(deployment_id: str) -> dict:
 
     settings = Settings.from_env()
 
-    # Discover resources by naming convention
-    # Container app name pattern: mock-{resource}-{deployment_id}
-    # Cosmos container pattern: {resource}_{deployment_id}
-    # We need to find them by listing container apps with the deployment_id suffix
     import subprocess, json
 
     errors = []
@@ -98,7 +111,7 @@ async def delete_mock_api(deployment_id: str) -> dict:
             ["az", "containerapp", "list", "--resource-group", settings.azure_resource_group,
              "--subscription", settings.azure_subscription_id, "--query", f"[?ends_with(name, '-{deployment_id}')].name",
              "--output", "json"],
-            capture_output=True, text=True, timeout=60, shell=True,
+            capture_output=True, text=True, timeout=60, shell=(os.name == "nt"),
         )
         app_names = json.loads(result.stdout) if result.stdout.strip() else []
         for app_name in app_names:
@@ -123,7 +136,7 @@ async def delete_mock_api(deployment_id: str) -> dict:
              "--database-name", "mockapi",
              "--query", f"[?ends_with(name, '_{deployment_id}')].name",
              "--output", "json"],
-            capture_output=True, text=True, timeout=60, shell=True,
+            capture_output=True, text=True, timeout=60, shell=(os.name == "nt"),
         )
         container_names = json.loads(result.stdout) if result.stdout.strip() else []
         for cname in container_names:

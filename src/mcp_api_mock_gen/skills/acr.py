@@ -18,7 +18,7 @@ def _az(args: list[str], check: bool = True, timeout: int = 600) -> subprocess.C
     cmd = ["az"] + args + ["--output", "json"]
     logger.info("az %s", " ".join(args[:10]))
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", "NO_COLOR": "1"}
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, shell=True, env=env)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, shell=(os.name == "nt"), env=env)
     if check and result.returncode != 0:
         raise RuntimeError(f"az acr build failed:\n{result.stderr}\n{result.stdout}")
     return result
