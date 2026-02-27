@@ -29,38 +29,35 @@ flowchart LR
     Agent["Copilot CLI<br>or any MCP client"]
     MCP["MCP Server"]
     Cosmos[("CosmosDB")]
+    ACR["Container<br>Registry"]
+    AOAI["Azure OpenAI"]
+    ACA["Container<br>Apps"]
 
     subgraph SDK ["GitHub Copilot SDK (gpt-5.3-codex)"]
         direction TB
-        Code["Writes code:<br>main.py<br>Dockerfile<br>requirements.txt<br>generate_data.py"]
-        T1["tool: build_image"]
-        T2["tool: run_script"]
-        T3["tool: create_container_app"]
-        T4["tool: smoke_test"]
-        Code ~~~ T1 ~~~ T2 ~~~ T3 ~~~ T4
+        Writes["Writes code<br><i>main.py, Dockerfile,<br>requirements.txt,<br>generate_data.py</i>"]
+        Tools["Uses tools<br><i>build_image<br>run_script<br>create_container_app<br>smoke_test</i>"]
+        Writes --- Tools
     end
-
-    ACR["Container<br>Registry"]
-    AOAI["Azure OpenAI<br>(structured outputs)"]
-    ACA["Container<br>Apps"]
 
     Agent -- "create_mock_api()" --> MCP
     MCP -- "seed sample data" --> Cosmos
-    MCP -- "start session + tools" --> SDK
+    MCP -- "start session" --> SDK
 
-    T1 -- "ACR remote build" --> ACR
-    T2 -- "generate_data.py" --> AOAI
-    T2 -- "insert records" --> Cosmos
-    T3 -- "deploy image" --> ACA
-    T4 -- "GET /api/..." --> ACA
+    Tools -- "build_image:<br>Docker build" --> ACR
+    Tools -- "run_script: generate_data.py<br>generate + insert records" --> AOAI
+    Tools -- "run_script: generate_data.py<br>insert records" --> Cosmos
+    Tools -- "create_container_app:<br>deploy API" --> ACA
+    Tools -- "smoke_test:<br>GET /api/..." --> ACA
 
     MCP -- "deployment_id +<br>api_base_url" --> Agent
 ```
 
 The Copilot SDK does two things: it **writes code** (API server, Dockerfile,
 data generation script) and it **calls tools** to execute that code against
-Azure services. If any tool fails (Docker build error, script crash), the SDK
-reads the error, fixes the code, and retries autonomously.
+Azure services. The `run_script` tool runs `generate_data.py` which calls
+Azure OpenAI to generate records and inserts them directly into CosmosDB.
+If any step fails, the SDK reads the error, fixes the code, and retries.
 
 ## Quick start
 

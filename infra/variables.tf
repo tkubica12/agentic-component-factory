@@ -22,7 +22,7 @@ variable "mcp_api_key" {
 }
 
 variable "mcp_server_image" {
-  description = "Docker image for the MCP server (default uses ACR built during deployment)"
+  description = "Docker image for the MCP server"
   type        = string
-  default     = ""
+  default     = "ghcr.io/tkubica12/mcp-api-mock-gen:latest"
 }

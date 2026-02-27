@@ -204,11 +204,6 @@ resource "azurerm_container_app" "mcp_server" {
     identity_ids = [azurerm_user_assigned_identity.apps.id]
   }
 
-  registry {
-    server   = azurerm_container_registry.main.login_server
-    identity = azurerm_user_assigned_identity.apps.id
-  }
-
   ingress {
     external_enabled = true
     target_port      = 8000
@@ -226,7 +221,7 @@ resource "azurerm_container_app" "mcp_server" {
 
     container {
       name   = "mcp-server"
-      image  = var.mcp_server_image != "" ? var.mcp_server_image : "${azurerm_container_registry.main.login_server}/mcp-api-mock-gen:latest"
+      image  = var.mcp_server_image
       cpu    = 2
       memory = "4Gi"
 
