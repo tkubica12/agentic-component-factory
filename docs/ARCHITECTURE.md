@@ -7,8 +7,9 @@ A FastMCP server exposes two tools (`create_mock_api`, `delete_mock_api`) that o
 ## Components
 
 ### MCP Server (FastMCP)
-- Exposes `create_mock_api` and `delete_mock_api`
-- Validates inputs, orchestrates code generation and deployment
+- Exposes `create_mock_api`, `get_deployment_status`, and `delete_mock_api`
+- Async pattern: create starts a background job, clients poll for status
+- In-memory job store tracks deployment state
 
 ### Generation Engine (GitHub Copilot SDK)
 - Azure OpenAI BYOK (gpt-5.3-codex, Responses API wire format)
@@ -38,15 +39,21 @@ A FastMCP server exposes two tools (`create_mock_api`, `delete_mock_api`) that o
 ## Runtime Flow
 
 ### `create_mock_api(name, sample_records, record_count, data_description)`
-1. Create CosmosDB container via `az` CLI, seed `sample_records` via sync Cosmos SDK.
-2. Start Copilot SDK session (Azure OpenAI BYOK, gpt-5.3-codex).
+Starts a background job and returns immediately with `deployment_id` + `status: "running"`.
+
+The background job:
+1. Creates CosmosDB container via `az` CLI, seeds `sample_records` via sync Cosmos SDK.
+2. Starts Copilot SDK session (Azure OpenAI BYOK, gpt-5.3-codex).
 3. SDK writes files: `main.py`, `Dockerfile`, `requirements.txt`, optionally `generate_data.py`.
 4. SDK calls custom tools in a loop (self-correcting on errors):
    - **`build_image`** — sends code to ACR remote build (`az acr build --no-logs`), gets Docker image
    - **`run_script`** (if `record_count > 0`) — executes `generate_data.py` which calls Azure OpenAI Responses API with Pydantic structured outputs, then inserts records into CosmosDB
    - **`create_container_app`** — deploys the image as a Container App (`az containerapp create`, 0.25 vCPU, 0.5Gi, external ingress, user-assigned MI)
    - **`smoke_test`** — HTTP GET to the deployed Container App, retries up to 3 times, verifies 200 OK
-5. Returns `deployment_id`, `api_base_url`, `endpoints`.
+5. Updates job status to `succeeded` or `failed`.
+
+### `get_deployment_status(deployment_id)`
+Returns current state of a deployment. Poll until `status` is `succeeded` or `failed`.
 
 ### `delete_mock_api(deployment_id)`
 1. Find container apps and Cosmos containers by naming convention (suffix = `deployment_id`).

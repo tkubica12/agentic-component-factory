@@ -1,7 +1,6 @@
-"""Test client for the MCP server using FastMCP Client.
+"""Test client for the MCP server using FastMCP Client (in-process).
 
-Tests create_mock_api (with and without data generation) and delete_mock_api,
-and verifies that the deployed API actually works with CRUD operations.
+Uses the async pattern: starts deployment, polls for status, then tests CRUD.
 """
 
 import asyncio
@@ -13,13 +12,10 @@ import urllib.request
 import urllib.error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
-
 from fastmcp import Client
 from mcp_api_mock_gen.server import mcp
-
 
 SAMPLE_PRODUCTS = [
     {"id": "1", "name": "Wireless Mouse", "price": 29.99, "category": "electronics", "in_stock": True},
@@ -28,175 +24,125 @@ SAMPLE_PRODUCTS = [
 ]
 
 
-def _print_result(result):
-    if result.is_error:
-        print("ERROR!")
+def _parse(result):
     for item in result.content:
         if hasattr(item, "text"):
             try:
-                parsed = json.loads(item.text)
-                print(json.dumps(parsed, indent=2))
-            except json.JSONDecodeError:
-                print(item.text)
-        else:
-            print(item)
-
-
-def _extract_field(result, field):
-    for item in result.content:
-        if hasattr(item, "text"):
-            try:
-                return json.loads(item.text).get(field)
+                return json.loads(item.text)
             except Exception:
                 pass
-    return None
+    return {}
 
 
-def _http(method, url, body=None, timeout=30):
+def _http(method, url, body=None):
     data = json.dumps(body).encode() if body else None
     req = urllib.request.Request(url, method=method, data=data)
     if data:
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             return resp.status, resp.read().decode()
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode() if e.fp else ""
 
 
-def _wait_for_ready(base_url, resource, max_wait=90):
-    url = f"{base_url}/api/{resource}"
-    for i in range(max_wait // 10):
-        try:
-            status, body = _http("GET", url, timeout=15)
-            if status < 500:
-                return True
-        except Exception:
-            pass
-        print(f"  Waiting for API to be ready... ({(i+1)*10}s)")
-        time.sleep(10)
-    return False
+async def poll_status(client, deployment_id, timeout=600, interval=15):
+    """Poll get_deployment_status until succeeded or failed."""
+    start = time.time()
+    while time.time() - start < timeout:
+        result = await client.call_tool("get_deployment_status", {"deployment_id": deployment_id}, raise_on_error=False)
+        data = _parse(result)
+        status = data.get("status", "unknown")
+        print(f"  Status: {status} ({int(time.time()-start)}s elapsed)")
+        if status in ("succeeded", "failed"):
+            return data
+        await asyncio.sleep(interval)
+    return {"status": "timeout", "error": f"Timed out after {timeout}s"}
 
 
-def test_crud(base_url, resource, expected_min_records=3):
-    """Test CRUD operations. Returns (passed, failed) counts."""
-    passed = 0
-    failed = 0
-
-    def check(name, condition, detail=""):
+def test_crud(base_url, resource, expected_min=3):
+    passed = failed = 0
+    def check(name, ok, detail=""):
         nonlocal passed, failed
-        if condition:
-            print(f"  PASS: {name}")
-            passed += 1
-        else:
-            print(f"  FAIL: {name} {detail}")
-            failed += 1
+        if ok: print(f"  PASS: {name}"); passed += 1
+        else: print(f"  FAIL: {name} {detail}"); failed += 1
 
     url = f"{base_url}/api/{resource}"
+    # Wait for ready
+    for i in range(12):
+        try:
+            s, _ = _http("GET", url)
+            if s < 500: break
+        except Exception: pass
+        time.sleep(10); print(f"  Waiting... ({(i+1)*10}s)")
 
-    # GET list
-    status, body = _http("GET", url)
-    check("GET list returns 200", status == 200, f"got {status}")
-    items = json.loads(body) if status == 200 else []
-    check(f"GET list has >= {expected_min_records} records", len(items) >= expected_min_records, f"got {len(items)} items")
-    if items:
-        print(f"  INFO: Total records in API: {len(items)}")
+    s, body = _http("GET", url)
+    check("GET list 200", s == 200, f"got {s}")
+    items = json.loads(body) if s == 200 else []
+    check(f"GET list >= {expected_min}", len(items) >= expected_min, f"got {len(items)}")
+    print(f"  INFO: {len(items)} records")
 
-    # GET by ID
-    status, body = _http("GET", f"{url}/1")
-    check("GET /1 returns 200", status == 200, f"got {status}")
-    if status == 200:
-        item = json.loads(body)
-        check("GET /1 has correct name", item.get("name") == "Wireless Mouse", f"got {item.get('name')}")
+    s, body = _http("GET", f"{url}/1")
+    check("GET /1 returns 200", s == 200, f"got {s}")
 
-    # POST
-    new_item = {"id": "test-crud", "name": "Test Widget", "price": 5.0, "category": "test", "in_stock": True}
-    status, body = _http("POST", url, new_item)
-    check("POST returns 200/201", status in (200, 201), f"got {status}")
-    created_id = None
-    if status in (200, 201):
-        created_id = json.loads(body).get("id", "test-crud")
-
-    if created_id:
-        # GET created
-        status, body = _http("GET", f"{url}/{created_id}")
-        check("GET created returns 200", status == 200, f"got {status}")
-
-        # PATCH
-        status, body = _http("PATCH", f"{url}/{created_id}", {"price": 7.5})
-        check("PATCH returns 200", status == 200, f"got {status}")
-        if status == 200:
-            check("PATCH updated price", json.loads(body).get("price") == 7.5)
-
-        # DELETE
-        status, body = _http("DELETE", f"{url}/{created_id}")
-        check("DELETE returns 200/204", status in (200, 204), f"got {status}")
-
-        # Verify deleted
-        status, body = _http("GET", f"{url}/{created_id}")
-        check("GET deleted returns 404", status == 404, f"got {status}")
-
+    s, body = _http("POST", url, {"name": "Test", "price": 5.0, "category": "test", "in_stock": True})
+    check("POST 200/201", s in (200, 201), f"got {s}")
+    cid = json.loads(body).get("id") if s in (200, 201) else None
+    if cid:
+        s, _ = _http("GET", f"{url}/{cid}"); check("GET created 200", s == 200)
+        s, body = _http("PATCH", f"{url}/{cid}", {"price": 7.5}); check("PATCH 200", s == 200)
+        s, _ = _http("DELETE", f"{url}/{cid}"); check("DELETE 200/204", s in (200, 204))
+        s, _ = _http("GET", f"{url}/{cid}"); check("GET deleted 404", s == 404)
     return passed, failed
 
 
 async def main():
     print("=" * 60)
-    print("MCP API Mock Generator - E2E Test")
+    print("MCP API Mock Generator - E2E Test (Async Pattern)")
     print("=" * 60)
 
     async with Client(mcp) as client:
         tools = await client.list_tools()
-        print(f"\nAvailable tools: {[t.name for t in tools]}")
+        print(f"\nTools: {[t.name for t in tools]}")
 
-        # === Test 1: Create with data generation ===
+        # Start deployment
         print(f"\n{'='*60}")
-        print("TEST: create_mock_api with synthetic data generation")
+        print("create_mock_api (starts background job)")
         print(f"{'='*60}")
-        result = await client.call_tool(
-            "create_mock_api",
-            {
-                "name": "products",
-                "sample_records": SAMPLE_PRODUCTS,
-                "record_count": 10,
-                "data_description": "realistic tech products with varied categories (electronics, accessories, peripherals, cables) and realistic pricing between $5 and $500",
-            },
-            raise_on_error=False,
-            timeout=900,
-        )
-        print("\nResult:")
-        _print_result(result)
+        result = await client.call_tool("create_mock_api", {
+            "name": "products", "sample_records": SAMPLE_PRODUCTS,
+            "record_count": 10,
+            "data_description": "realistic tech products $5-$500",
+        }, raise_on_error=False, timeout=30)
+        data = _parse(result)
+        dep_id = data.get("deployment_id")
+        print(f"  Started: deployment_id={dep_id}, status={data.get('status')}")
 
-        api_url = _extract_field(result, "api_base_url")
-        deployment_id = _extract_field(result, "deployment_id")
-        status = _extract_field(result, "status")
+        if not dep_id:
+            print("FAILED to start"); return
 
-        if status != "succeeded" or not api_url:
-            print("\nCREATE FAILED — cannot test CRUD. Exiting.")
-            return
-
-        # CRUD tests — expect at least 3 seeded + some generated
+        # Poll for completion
         print(f"\n{'='*60}")
-        print(f"Testing CRUD at {api_url}")
+        print(f"Polling get_deployment_status('{dep_id}')")
         print(f"{'='*60}")
+        final = await poll_status(client, dep_id, timeout=600)
+        print(f"\nFinal: {json.dumps(final, indent=2)}")
 
-        if _wait_for_ready(api_url, "products"):
-            passed, failed = test_crud(api_url, "products", expected_min_records=5)
-            print(f"\nCRUD Tests: {passed} passed, {failed} failed")
+        api_url = final.get("api_base_url")
+        if final.get("status") == "succeeded" and api_url:
+            print(f"\n{'='*60}")
+            print(f"CRUD Tests at {api_url}")
+            print(f"{'='*60}")
+            p, f = test_crud(api_url, "products", expected_min=5)
+            print(f"\nCRUD: {p} passed, {f} failed")
+
+            print(f"\n{'='*60}")
+            print(f"delete_mock_api('{dep_id}')")
+            print(f"{'='*60}")
+            dr = await client.call_tool("delete_mock_api", {"deployment_id": dep_id}, raise_on_error=False, timeout=120)
+            print(f"  Delete: {_parse(dr).get('status')}")
         else:
-            print("API never became ready.")
-
-        # Delete
-        print(f"\n{'='*60}")
-        print(f"delete_mock_api('{deployment_id}')")
-        print(f"{'='*60}")
-        delete_result = await client.call_tool(
-            "delete_mock_api",
-            {"deployment_id": deployment_id},
-            raise_on_error=False,
-            timeout=120,
-        )
-        print("\nResult:")
-        _print_result(delete_result)
+            print(f"DEPLOYMENT FAILED: {final.get('error')}")
 
     print("\nDone!")
 

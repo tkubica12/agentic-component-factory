@@ -295,9 +295,11 @@ async def run_codegen(
     settings: Settings,
     record_count: int = 0,
     data_description: str = "",
+    deployment_id: str = "",
 ) -> dict[str, Any]:
     """Run the full code generation and deployment pipeline via Copilot SDK."""
-    deployment_id = str(uuid.uuid4())[:8]
+    if not deployment_id:
+        deployment_id = str(uuid.uuid4())[:8]
     safe_name = resource_name.lower().replace(" ", "").replace("_", "")[:20]
     app_name = f"mock-{safe_name}-{deployment_id}"
     image_tag = f"mock-{safe_name}-{deployment_id}:latest"

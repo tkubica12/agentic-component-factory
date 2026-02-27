@@ -91,17 +91,13 @@ mcp_endpoint = "https://mcp-api-mock-gen.xxxxxxxx.swedencentral.azurecontainerap
 
 ### 2. Configure Copilot CLI
 
-Add the MCP server to your Copilot CLI config:
+Create new folder, run copilot and configure the MCP server:
 
-**Linux/macOS:** `~/.config/github-copilot/config.yml`
-**Windows:** `%APPDATA%\github-copilot\config.yml`
-
-```yaml
-mcpServers:
-  mock-api:
-    url: https://mcp-api-mock-gen.xxxxxxxx.swedencentral.azurecontainerapps.io/mcp
-    headers:
-      Authorization: Bearer YOUR_SECRET_KEY
+```bash
+mkdir copilot-test
+cd copilot-test
+copilot
+/mcp add  # Type http, paste the URL, and add the Authorization header with your MCP API key
 ```
 
 ### 3. Use it
@@ -111,51 +107,23 @@ Open Copilot CLI and describe what you need:
 ```
 Build me an e-commerce dashboard with products, orders, and customers.
 Generate 50 products, 200 orders, and 30 customers with realistic data.
-Then create a React UI that displays everything.
+Then create a React UI that displays everything. Run it for me, tell me how to access it.
 ```
 
 Copilot will call the MCP server to spin up three live APIs with synthetic
 data, then build a frontend connected to them.
-
-## Demo scenario
-
-```
-User:
-  Build a project management app with projects, tasks, and team members.
-  Generate 30 projects, 100 tasks, and 20 team members.
-  Build a React dashboard.
-
-Copilot CLI:
-  Step 1/4 -- Creating Projects API
-    create_mock_api(name="projects", sample_records=[...], record_count=30,
-      data_description="software projects, statuses: planning/in_progress/completed")
-    -> https://mock-projects-f4a1b2c3.....azurecontainerapps.io
-       32 records (2 seeded + 30 generated)
-
-  Step 2/4 -- Creating Tasks API
-    create_mock_api(name="tasks", sample_records=[...], record_count=100,
-      data_description="dev tasks, priorities: low/medium/high/critical")
-    -> https://mock-tasks-e5d6c7b8.....azurecontainerapps.io
-       102 records
-
-  Step 3/4 -- Creating Team Members API
-    create_mock_api(name="members", sample_records=[...], record_count=20,
-      data_description="team across Engineering/Design/Product/QA")
-    -> https://mock-members-a9b8c7d6.....azurecontainerapps.io
-       22 records
-
-  Step 4/4 -- Building React Dashboard
-    Done! Running at http://localhost:3000 with 156 records.
-
-  Clean up:  delete_mock_api("f4a1b2c3"), delete_mock_api("e5d6c7b8"), ...
-```
 
 Check your Azure portal to see the Container Apps, CosmosDB collections, and
 ACR images that were created.
 
 ## MCP tools
 
+The server uses an async pattern: `create_mock_api` starts a background job
+and returns immediately. Poll `get_deployment_status` until the job completes.
+
 ### create_mock_api
+
+Starts a deployment (returns immediately).
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -164,8 +132,18 @@ ACR images that were created.
 | record_count | int | no | Synthetic records to generate (default: 0) |
 | data_description | str | no | Guide for data generation |
 
-Returns `deployment_id`, `api_base_url`, `endpoints`, `records_seeded`,
-`records_generated`.
+Returns `deployment_id` and `status: "running"`.
+
+### get_deployment_status
+
+Poll this until `status` is `"succeeded"` or `"failed"`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| deployment_id | str | yes | ID from create_mock_api |
+
+Returns full deployment state including `api_base_url`, `endpoints`,
+`records_seeded`, `records_generated` when succeeded.
 
 ### delete_mock_api
 
