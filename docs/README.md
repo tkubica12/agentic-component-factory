@@ -24,60 +24,43 @@ containers, run scripts, and verify the result -- all in an autonomous loop.
 
 ## How it works
 
-```
-+------------------+                              +---------------------------+
-|  Copilot CLI     |  create_mock_api(            |  MCP Server               |
-|  or any          |    name, sample_records,     |  (Container App in Azure) |
-|  MCP client      |    record_count,             |                           |
-|                  |    data_description)         |                           |
-+--------+---------+ ---------------------------> +------------+--------------+
-         |                                                      |
-         |                                         1. Create CosmosDB container
-         |                                            and seed sample records
-         |                                                      |
-         |                                         2. Start Copilot SDK session
-         |                                            with 4 custom tools
-         |                                                      |
-         |                                         +------------v--------------+
-         |                                         |  GitHub Copilot SDK       |
-         |                                         |  (Azure OpenAI BYOK)      |
-         |                                         |                           |
-         |                                         |  Codes files:             |
-         |                                         |   - main.py (FastAPI)     |
-         |                                         |   - Dockerfile            |
-         |                                         |   - requirements.txt      |
-         |                                         |   - generate_data.py      |
-         |                                         |                           |
-         |                                         |  Calls tools:             |
-         |                                         |                           |
-         |                                         |  [build_image]            |
-         |                                         |   Code -> ACR -> Image    |
-         |                                         |                           |
-         |                                         |  [run_script]             |
-         |                                         |   generate_data.py        |
-         |                                         |   -> Azure OpenAI         |
-         |                                         |      (structured outputs) |
-         |                                         |   -> records into Cosmos  |
-         |                                         |                           |
-         |                                         |  [create_container_app]   |
-         |                                         |   Image -> Container App  |
-         |                                         |                           |
-         |                                         |  [smoke_test]             |
-         |                                         |   GET /api/{resource}     |
-         |                                         |   -> 200 OK               |
-         |                                         |                           |
-         |                                         |  Repair if errors ^       |
-         |                                         +---------------------------+
-         |
-         |  { deployment_id, api_base_url,
-         |    endpoints, records_seeded,
-<--------+    records_generated }
+```mermaid
+flowchart LR
+    Agent["Copilot CLI<br>or any MCP client"]
+    MCP["MCP Server"]
+    Cosmos[("CosmosDB")]
+
+    subgraph SDK ["GitHub Copilot SDK (gpt-5.3-codex)"]
+        direction TB
+        Code["Writes code:<br>main.py<br>Dockerfile<br>requirements.txt<br>generate_data.py"]
+        T1["tool: build_image"]
+        T2["tool: run_script"]
+        T3["tool: create_container_app"]
+        T4["tool: smoke_test"]
+        Code ~~~ T1 ~~~ T2 ~~~ T3 ~~~ T4
+    end
+
+    ACR["Container<br>Registry"]
+    AOAI["Azure OpenAI<br>(structured outputs)"]
+    ACA["Container<br>Apps"]
+
+    Agent -- "create_mock_api()" --> MCP
+    MCP -- "seed sample data" --> Cosmos
+    MCP -- "start session + tools" --> SDK
+
+    T1 -- "ACR remote build" --> ACR
+    T2 -- "generate_data.py" --> AOAI
+    T2 -- "insert records" --> Cosmos
+    T3 -- "deploy image" --> ACA
+    T4 -- "GET /api/..." --> ACA
+
+    MCP -- "deployment_id +<br>api_base_url" --> Agent
 ```
 
-The SDK writes code using its own built-in file tools, then calls custom tools
-provided by the MCP server to build, deploy, generate data, and verify. If any
-step fails (Docker build error, script crash), the SDK reads the error output,
-fixes the code, and retries autonomously.
+The Copilot SDK does two things: it **writes code** (API server, Dockerfile,
+data generation script) and it **calls tools** to execute that code against
+Azure services. If any tool fails (Docker build error, script crash), the SDK
+reads the error, fixes the code, and retries autonomously.
 
 ## Quick start
 

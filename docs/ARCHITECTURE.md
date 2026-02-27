@@ -41,13 +41,12 @@ A FastMCP server exposes two tools (`create_mock_api`, `delete_mock_api`) that o
 1. Create CosmosDB container via `az` CLI, seed `sample_records` via sync Cosmos SDK.
 2. Start Copilot SDK session (Azure OpenAI BYOK, gpt-5.3-codex).
 3. SDK writes files: `main.py`, `Dockerfile`, `requirements.txt`, optionally `generate_data.py`.
-4. SDK calls custom tools:
-   - **`build_image`** — ACR remote build (`az acr build --no-logs`)
-   - **`run_script`** — executes `generate_data.py` locally (Azure OpenAI Responses API with Pydantic structured outputs → records into CosmosDB)
-   - **`create_container_app`** — `az containerapp create` (0.25 vCPU, 0.5Gi, external ingress, user-assigned MI)
-   - **`smoke_test`** — HTTP GET with retries, verifies 200 OK
-5. If any tool fails, SDK reads error, fixes code, retries.
-6. Returns `deployment_id`, `api_base_url`, `endpoints`.
+4. SDK calls custom tools in a loop (self-correcting on errors):
+   - **`build_image`** — sends code to ACR remote build (`az acr build --no-logs`), gets Docker image
+   - **`run_script`** (if `record_count > 0`) — executes `generate_data.py` which calls Azure OpenAI Responses API with Pydantic structured outputs, then inserts records into CosmosDB
+   - **`create_container_app`** — deploys the image as a Container App (`az containerapp create`, 0.25 vCPU, 0.5Gi, external ingress, user-assigned MI)
+   - **`smoke_test`** — HTTP GET to the deployed Container App, retries up to 3 times, verifies 200 OK
+5. Returns `deployment_id`, `api_base_url`, `endpoints`.
 
 ### `delete_mock_api(deployment_id)`
 1. Find container apps and Cosmos containers by naming convention (suffix = `deployment_id`).
@@ -115,21 +114,33 @@ sequenceDiagram
     participant Agent
     participant MCP as MCP Server
     participant SDK as Copilot SDK
+    participant AOAI as Azure OpenAI
     participant Cosmos as Cosmos DB
     participant ACR as Container Registry
     participant ACA as Container Apps
 
     Agent->>MCP: create_mock_api(name, sample_records, ...)
-    MCP->>Cosmos: create container + seed data
-    MCP->>SDK: start session (gpt-5.3-codex)
+    MCP->>Cosmos: create container + seed sample records
+
+    MCP->>SDK: start session (AOAI BYOK, gpt-5.3-codex)
     SDK->>SDK: write main.py, Dockerfile, requirements.txt
+
+    SDK->>ACR: [build_image] ACR remote build
+    ACR-->>SDK: image built
+
     opt record_count > 0
         SDK->>SDK: write generate_data.py
-        SDK->>MCP: run_script(generate_data.py)
-        MCP->>Cosmos: insert generated records
+        SDK->>AOAI: [run_script] generate_data.py calls Responses API
+        AOAI-->>SDK: structured records (Pydantic)
+        SDK->>Cosmos: [run_script] insert generated records
     end
-    SDK->>MCP: build_image → ACR remote build
-    SDK->>MCP: create_container_app → az containerapp create
-    SDK->>MCP: smoke_test → HTTP GET 200 OK
+
+    SDK->>ACA: [create_container_app] deploy container
+    ACA-->>SDK: container app URL
+
+    SDK->>ACA: [smoke_test] GET /api/{resource}
+    ACA-->>SDK: 200 OK
+
+    SDK-->>MCP: done
     MCP-->>Agent: deployment_id + api_base_url + endpoints
 ```
