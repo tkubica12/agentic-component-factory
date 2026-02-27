@@ -1,0 +1,66 @@
+### Remote CRUD E2E (VS Code REST Client)
+### Run requests top-to-bottom so response references are available.
+### Override apiBaseUrl with your deployed mock API base URL.
+
+@apiBaseUrl = https://your-api-name.region.azurecontainerapps.io
+@resource = products
+
+### 1) GET list
+# @name getList
+GET {{apiBaseUrl}}/api/{{resource}}
+Accept: application/json
+
+###
+
+### 2) GET existing record by id=1
+# @name getOne
+GET {{apiBaseUrl}}/api/{{resource}}/1
+Accept: application/json
+
+###
+
+### 3) POST create
+# @name createItem
+POST {{apiBaseUrl}}/api/{{resource}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "name": "Test Widget",
+  "price": 5.0,
+  "category": "test",
+  "in_stock": true
+}
+
+###
+
+### 4) GET created record (id from POST)
+# @name getCreated
+GET {{apiBaseUrl}}/api/{{resource}}/{{createItem.response.body.$.id}}
+Accept: application/json
+
+###
+
+### 5) PATCH created record (id from POST)
+# @name patchCreated
+PATCH {{apiBaseUrl}}/api/{{resource}}/{{createItem.response.body.$.id}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "price": 7.5
+}
+
+###
+
+### 6) DELETE created record (id from POST)
+# @name deleteCreated
+DELETE {{apiBaseUrl}}/api/{{resource}}/{{createItem.response.body.$.id}}
+Accept: application/json
+
+###
+
+### 7) GET deleted record (should be 404)
+# @name getDeleted
+GET {{apiBaseUrl}}/api/{{resource}}/{{createItem.response.body.$.id}}
+Accept: application/json
