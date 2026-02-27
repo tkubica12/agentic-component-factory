@@ -38,6 +38,7 @@ flowchart LR
         Writes["Writes code<br><i>main.py, Dockerfile,<br>requirements.txt,<br>generate_data.py</i>"]
         Tools["Uses tools<br><i>build_image<br>run_script<br>create_container_app<br>smoke_test</i>"]
         Writes --- Tools
+        Tools -- "fix on error" --> Writes
     end
 
     Agent -- "create_mock_api()" --> MCP
