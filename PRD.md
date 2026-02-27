@@ -178,19 +178,8 @@ Deferred:
 - Auth providers integration
 - Multi-environment promotion flow
 
-## 13. Milestones
 
-1. **M1 - Local generation POC**
-   - MCP tool skeleton
-   - Generate Python Function handlers locally
-2. **M2 - Azure deployment integration**
-   - Deploy Function app + connect Cosmos
-3. **M3 - Synthetic data pipeline**
-   - Batched generation + validation + upload
-4. **M4 - End-to-end demo scenario**
-   - Build simple UI that consumes multiple generated APIs
-
-## 14. Open Questions
+## 13. Open Questions
 
 1. Default partition key strategy: `/id` vs configurable field?
 2. Should synthetic data generation support configurable limits above 10k with explicit override?
