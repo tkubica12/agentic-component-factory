@@ -9,7 +9,7 @@ The server receives:
 - Optional natural-language field descriptions
 - Optional synthetic record count
 
-It then orchestrates generation/deployment of an Azure Functions CRUD API and data persistence in Azure Cosmos DB serverless.
+It then orchestrates generation/deployment of a containerised CRUD API on Azure Container Apps and data persistence in Azure Cosmos DB serverless.
 
 ## 2. Problem Statement
 
@@ -58,10 +58,11 @@ Current pain points:
 
 ### FR-1: MCP tooling
 The MCP server must expose tools to:
-1. `create_mock_api`
-2. `generate_synthetic_data`
-3. `get_operation_status`
-4. `list_deployments`
+1. `create_mock_api` — *implemented*
+2. `delete_mock_api` — *implemented*
+3. `generate_synthetic_data` — *deferred*
+4. `get_operation_status` — *deferred*
+5. `list_deployments` — *deferred*
 
 ### FR-2: Input schema inference
 - Infer schema fields and primitive types from sample JSON.
@@ -90,7 +91,10 @@ For each API resource generated:
 - Store generated records in Cosmos DB.
 
 ### FR-7: Deployment behavior
-- Deploy or update a dedicated Azure Functions app per generated API resource in MVP.
+- Build a Docker image (FastAPI + uvicorn) via ACR remote build.
+- Deploy a dedicated Azure Container App per generated API resource.
+- Use smallest sizing (0.25 vCPU, 0.5 Gi), external ingress on port 8000.
+- Each deployment gets a unique GUID-based ID (8-char UUID4 prefix).
 - Return endpoint base URL and resource metadata.
 
 ### FR-9: OpenAPI contract output
@@ -102,24 +106,35 @@ Long operations return operation id and allow polling status.
 ## 8. MCP Tool Contracts (Draft)
 
 ### 8.1 `create_mock_api`
+
+The primary MCP tool. Azure configuration (subscription, resource group, Cosmos account, ACR, Container Apps Environment, managed identity) is read from server-side environment variables — callers do not supply infrastructure details.
+
 **Input**
-- `project_name: str`
-- `resource_name: str`
-- `sample_records: list[object]`
-- `azure_subscription_id: str`
-- `resource_group: str`
-- `location: str`
-- `cosmos_account_name: str`
-- `function_app_name: str`
+- `name: str` — Resource name for the API (e.g. `"products"`)
+- `sample_records: list[dict]` — One or more sample JSON records defining the schema and seed data
 
 **Output**
-- `operation_id: str`
-- `status: queued|running|succeeded|failed`
-- `api_base_url: str` (when available)
-- `resource_name: str`
-- `endpoints: object`
+- `status: str` — `succeeded` | `failed`
+- `deployment_id: str` — Unique 8-char ID for this deployment
+- `api_base_url: str | null` — Base URL of the deployed Container App
+- `endpoints: list[{method, path}]`
+- `error: str | null`
 
-### 8.2 `generate_synthetic_data`
+### 8.2 `delete_mock_api`
+
+Tears down a previously created mock API.
+
+**Input**
+- `deployment_id: str` — The deployment ID returned by `create_mock_api`
+
+**Output**
+- `status: str` — `succeeded` | `failed`
+- `error: str | null`
+
+### 8.3 `generate_synthetic_data` *(deferred)*
+
+Synthetic data generation is not yet implemented. The tool contract below is retained for future reference.
+
 **Input**
 - `deployment_id: str`
 - `sample_records: list[object]`
@@ -166,10 +181,13 @@ Included:
 - Single-resource CRUD API generation per operation
 - Basic exact-match filtering
 - Cosmos storage + data seeding
-- Synthetic generation tool
-- Default synthetic limit of 10,000 records per operation
+- Docker container deployment to Azure Container Apps
+- Deletion of deployed APIs
 - Basic OpenAPI/Swagger generation
-- Operation tracking
+
+Deferred (not yet implemented):
+- Synthetic data generation tool
+- Operation status polling and `list_deployments` tools
 
 Deferred:
 - Joins/relations across resources
