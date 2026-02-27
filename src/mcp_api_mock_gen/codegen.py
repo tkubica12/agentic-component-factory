@@ -111,13 +111,15 @@ SYSTEM_PROMPT_WITH_DATAGEN = SYSTEM_PROMPT_BASE + """
 4. generate_data.py - A data generation script that uses Azure OpenAI to generate synthetic records.
    This script MUST:
    - Use the openai library with AzureOpenAI client
-   - Use azure.identity.AzureCliCredential with get_bearer_token_provider for Entra auth
-   - Connect to the endpoint from AZURE_OPENAI_ENDPOINT env var using model "gpt-5.2"
+   - For credential: check if AZURE_CLIENT_ID env var is set. If yes, use ManagedIdentityCredential(client_id=...).
+     If not, use AzureCliCredential(). Then use get_bearer_token_provider for the token.
+   - Read DATAGEN_MODEL from env var for the model name 
+   - Connect to the endpoint from AZURE_OPENAI_ENDPOINT env var
    - Use the Responses API with structured outputs (text_format parameter) to enforce the schema
    - Define Pydantic models for the record schema (given below) and a list wrapper
    - Generate records in batches (batch_size items per API call)
    - For each generated record, add a UUID "id" field
-   - Insert all generated records into CosmosDB using azure.cosmos SDK with AzureCliCredential
+   - For CosmosDB: use the same credential as above to create a CosmosClient
    - Read COSMOS_ENDPOINT, COSMOS_DATABASE, COSMOS_CONTAINER from environment variables
    - Print progress and final count to stdout
    - The script structure should be:
@@ -125,14 +127,20 @@ SYSTEM_PROMPT_WITH_DATAGEN = SYSTEM_PROMPT_BASE + """
      import os, uuid, json
      from pydantic import BaseModel
      from openai import AzureOpenAI
-     from azure.identity import AzureCliCredential, get_bearer_token_provider
+     from azure.identity import AzureCliCredential, ManagedIdentityCredential, get_bearer_token_provider
      from azure.cosmos import CosmosClient
 
      # Pydantic models for structured output
      <SCHEMA_MODELS>
 
+     # Credential (MI in container, CLI locally)
+     client_id = os.environ.get("AZURE_CLIENT_ID")
+     if client_id:
+         credential = ManagedIdentityCredential(client_id=client_id)
+     else:
+         credential = AzureCliCredential()
+
      # Azure OpenAI setup
-     credential = AzureCliCredential()
      token_provider = get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default")
      ai_client = AzureOpenAI(
          azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
@@ -145,6 +153,8 @@ SYSTEM_PROMPT_WITH_DATAGEN = SYSTEM_PROMPT_BASE + """
      database = cosmos_client.get_database_client(os.environ["COSMOS_DATABASE"])
      container = database.get_container_client(os.environ["COSMOS_CONTAINER"])
 
+     DATAGEN_MODEL = os.environ.get("DATAGEN_MODEL", "gpt-53-codex")
+
      # Generate in batches
      total = <RECORD_COUNT>
      batch_size = min(20, total)
@@ -152,7 +162,7 @@ SYSTEM_PROMPT_WITH_DATAGEN = SYSTEM_PROMPT_BASE + """
      for batch_num in range(0, total, batch_size):
          count = min(batch_size, total - generated)
          response = ai_client.responses.parse(
-             model="gpt-5.2",
+             model=DATAGEN_MODEL,
              input=[{"role": "user", "content": f"Generate {count} realistic <DESCRIPTION>"}],
              text_format=<LIST_MODEL>,
          )
@@ -320,6 +330,8 @@ async def run_codegen(
         "COSMOS_DATABASE": db_name,
         "COSMOS_CONTAINER": container_name,
         "AZURE_OPENAI_ENDPOINT": settings.azure_openai_endpoint,
+        "DATAGEN_MODEL": settings.codex_model,
+        "AZURE_CLIENT_ID": os.environ.get("AZURE_CLIENT_ID", ""),
     })
 
     try:
