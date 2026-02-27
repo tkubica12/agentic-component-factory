@@ -58,11 +58,10 @@ Current pain points:
 
 ### FR-1: MCP tooling
 The MCP server must expose tools to:
-1. `create_mock_api` — *implemented*
+1. `create_mock_api` — *implemented* (includes optional synthetic data generation)
 2. `delete_mock_api` — *implemented*
-3. `generate_synthetic_data` — *deferred*
-4. `get_operation_status` — *deferred*
-5. `list_deployments` — *deferred*
+3. `get_operation_status` — *deferred*
+4. `list_deployments` — *deferred*
 
 ### FR-2: Input schema inference
 - Infer schema fields and primitive types from sample JSON.
@@ -84,11 +83,15 @@ For each API resource generated:
 - Seed sample data and synthetic data.
 - Configure partition key strategy (default `/id` for MVP unless specified).
 
-### FR-6: Synthetic data generation
-- Accept example JSON + free-text field explanations + target count.
-- Generate in batches with retries and validation.
+### FR-6: Synthetic data generation — *implemented*
+- Integrated into `create_mock_api` via optional `record_count` and `data_description` parameters.
+- When `record_count > 0`, the Copilot SDK agent generates a `generate_data.py` script.
+- The script uses Azure OpenAI Responses API (gpt-5.2) with structured outputs (Pydantic models derived from inferred schema).
+- Authentication via Entra (`AzureCliCredential` + `get_bearer_token_provider`); endpoint configured via `AZURE_OPENAI_ENDPOINT` env var.
+- Generated records are inserted directly into CosmosDB.
+- The `run_script` skill executes the generation script locally.
 - Enforce default maximum of 10,000 generated records per operation in MVP.
-- Store generated records in Cosmos DB.
+- Result includes `records_seeded` and `records_generated` counts.
 
 ### FR-7: Deployment behavior
 - Build a Docker image (FastAPI + uvicorn) via ACR remote build.
@@ -112,12 +115,16 @@ The primary MCP tool. Azure configuration (subscription, resource group, Cosmos 
 **Input**
 - `name: str` — Resource name for the API (e.g. `"products"`)
 - `sample_records: list[dict]` — One or more sample JSON records defining the schema and seed data
+- `record_count: int` (optional, default 0) — Number of synthetic records to generate
+- `data_description: str` (optional) — Natural language description to guide synthetic data generation
 
 **Output**
 - `status: str` — `succeeded` | `failed`
 - `deployment_id: str` — Unique 8-char ID for this deployment
 - `api_base_url: str | null` — Base URL of the deployed Container App
 - `endpoints: list[{method, path}]`
+- `records_seeded: int` — Number of sample records seeded
+- `records_generated: int` — Number of synthetic records generated
 - `error: str | null`
 
 ### 8.2 `delete_mock_api`
@@ -131,21 +138,9 @@ Tears down a previously created mock API.
 - `status: str` — `succeeded` | `failed`
 - `error: str | null`
 
-### 8.3 `generate_synthetic_data` *(deferred)*
+### 8.3 `generate_synthetic_data` *(removed — merged into `create_mock_api`)*
 
-Synthetic data generation is not yet implemented. The tool contract below is retained for future reference.
-
-**Input**
-- `deployment_id: str`
-- `sample_records: list[object]`
-- `field_descriptions: str`
-- `record_count: int`
-- `batch_size: int` (default 100)
-
-**Output**
-- `operation_id: str`
-- `status: queued|running|succeeded|failed`
-- `records_generated: int`
+Synthetic data generation is now handled by `create_mock_api` via the optional `record_count` and `data_description` parameters. See section 8.1.
 
 ## 9. Non-Functional Requirements
 
@@ -181,12 +176,12 @@ Included:
 - Single-resource CRUD API generation per operation
 - Basic exact-match filtering
 - Cosmos storage + data seeding
+- Synthetic data generation via Azure OpenAI structured outputs
 - Docker container deployment to Azure Container Apps
 - Deletion of deployed APIs
 - Basic OpenAPI/Swagger generation
 
 Deferred (not yet implemented):
-- Synthetic data generation tool
 - Operation status polling and `list_deployments` tools
 
 Deferred:

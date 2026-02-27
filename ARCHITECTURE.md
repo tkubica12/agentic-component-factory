@@ -11,10 +11,13 @@ The solution consists of a Python MCP server that orchestrates API generation an
    - Deploy to Azure Container Apps
    - Smoke-test the live endpoint
 
-2. **Synthetic data generation path** *(deferred)*
-   - Generate batch scripts/prompts based on sample schema + field semantics
-   - Execute generation and validation pipeline
-   - Insert data into Cosmos DB for immediate API usage
+2. **Synthetic data generation path** (integrated into `create_mock_api`)
+   - When `record_count > 0`, the Copilot SDK agent generates a `generate_data.py` script
+   - The script uses Azure OpenAI Responses API (gpt-5.2) with structured outputs (Pydantic models derived from inferred schema)
+   - Authenticates via Entra (`AzureCliCredential` + `get_bearer_token_provider`)
+   - Azure OpenAI endpoint configurable via `AZURE_OPENAI_ENDPOINT` env var
+   - Generated records are inserted directly into CosmosDB
+   - The `run_script` skill executes the script locally
 
 ## 2. Core Components
 
@@ -29,6 +32,8 @@ Responsibilities:
 Responsibilities:
 - Produce `main.py` (FastAPI + uvicorn CRUD handlers)
 - Produce `requirements.txt` and `Dockerfile`
+- When synthetic data is requested, produce `generate_data.py` (Azure OpenAI Responses API with Pydantic structured outputs)
+- Schema inference includes Pydantic model definitions for structured outputs
 - Regenerate/fix when validation fails
 
 ### 2.3 Deployment Engine (Azure Container Apps)
@@ -55,15 +60,17 @@ Responsibilities:
 ## 3. Runtime Flow
 
 ### 3.1 `create_mock_api`
-1. MCP receives request with `name` and `sample_records`.
+1. MCP receives request with `name`, `sample_records`, and optional `record_count` / `data_description`.
 2. Generate a unique deployment ID (8-char UUID4 prefix).
-3. Validate schema and infer types/id strategy.
+3. Validate schema and infer types/id strategy (including Pydantic model definitions).
 4. Invoke generation engine to create `main.py`, `requirements.txt`, `Dockerfile`.
-5. Create Cosmos container (`{resource}_{deployment_id}`), seed sample records.
-6. Build Docker image via ACR remote build (`mock-{resource}-{deployment_id}:latest`).
-7. Create Container App (`mock-{resource}-{deployment_id}`) with managed identity.
-8. Smoke-test the live endpoint.
-9. Return deployment ID, API base URL, and endpoint metadata.
+5. If `record_count > 0`, generation engine also creates `generate_data.py` (Azure OpenAI Responses API + Pydantic structured outputs).
+6. Create Cosmos container (`{resource}_{deployment_id}`), seed sample records.
+7. If `generate_data.py` was created, the `run_script` skill executes it locally to generate and insert synthetic records into CosmosDB.
+8. Build Docker image via ACR remote build (`mock-{resource}-{deployment_id}:latest`).
+9. Create Container App (`mock-{resource}-{deployment_id}`) with managed identity.
+10. Smoke-test the live endpoint.
+11. Return deployment ID, API base URL, endpoint metadata, `records_seeded`, and `records_generated`.
 
 ### 3.2 `delete_mock_api`
 1. MCP receives `deployment_id`.
@@ -71,13 +78,14 @@ Responsibilities:
 3. Delete the Cosmos container.
 4. Return status.
 
-### 3.3 `generate_synthetic_data` *(deferred)*
-1. MCP receives example records, field descriptions, and count.
-2. Build generation prompt/spec and batch plan.
-3. Run generation script in batches.
-4. Validate records against inferred schema.
-5. Upload to Cosmos container.
-6. Return generation summary and status.
+### 3.3 Synthetic data generation (within `create_mock_api`)
+1. Copilot SDK agent generates `generate_data.py` using inferred schema and `data_description`.
+2. The script uses Azure OpenAI Responses API (gpt-5.2, model `gpt-5.2`) with Pydantic models for structured outputs.
+3. Authentication: `AzureCliCredential` + `get_bearer_token_provider` (Entra).
+4. Endpoint configured via `AZURE_OPENAI_ENDPOINT` env var.
+5. The `run_script` skill executes the script locally.
+6. Generated records are validated and inserted directly into the CosmosDB container.
+7. Result includes `records_seeded` and `records_generated` counts.
 
 ## 4. API Design (Generated Service)
 
@@ -136,7 +144,7 @@ Synthetic generation limits (MVP):
 - ACR Pull role assigned to the MI for image pulls.
 - `AZURE_CLIENT_ID` environment variable tells `DefaultAzureCredential` which MI to use.
 - Current user gets Cosmos RBAC and ACR Push for development/seeding.
-- Required secrets (subscription, endpoints) loaded from `.env` at server startup — never committed.
+- Required secrets (subscription, endpoints, `AZURE_OPENAI_ENDPOINT`) loaded from `.env` at server startup — never committed.
 
 ## 9. Observability
 
@@ -175,6 +183,7 @@ mcp-api-mock-gen/
         cosmos.py          # CosmosDB skills (az CLI + sync SDK)
         acr.py             # ACR remote build skill
         container_apps.py  # Container App create/delete + smoke test
+        scripts.py         # Script execution skill (run_script for data generation)
   tests/
     __init__.py
     test_client.py         # FastMCP in-process client test
@@ -213,20 +222,28 @@ sequenceDiagram
     participant MCP as MCP Server
     participant Gen as Copilot SDK Engine
     participant Cosmos as Cosmos DB
+    participant AOAI as Azure OpenAI
     participant ACR as Container Registry
     participant ACA as Container Apps
 
-    Agent->>MCP: create_mock_api(name, sample_records)
+    Agent->>MCP: create_mock_api(name, sample_records, record_count?, data_description?)
     MCP->>Gen: generate main.py, requirements.txt, Dockerfile
     Gen-->>MCP: generated Python + Docker artifacts
     MCP->>Cosmos: create container + seed data
+    opt record_count > 0
+        MCP->>Gen: generate generate_data.py (Pydantic structured outputs)
+        Gen-->>MCP: data generation script
+        MCP->>AOAI: run_script executes generate_data.py (gpt-5.2, Entra auth)
+        AOAI-->>MCP: synthetic records
+        MCP->>Cosmos: insert generated records
+    end
     MCP->>ACR: az acr build (remote Docker build)
     ACR-->>MCP: image built
     MCP->>ACA: az containerapp create (0.25 vCPU, external ingress)
     ACA-->>MCP: FQDN
     MCP->>ACA: smoke test (HTTP GET)
     ACA-->>MCP: 200 OK
-    MCP-->>Agent: deployment_id + api_base_url + endpoints
+    MCP-->>Agent: deployment_id + api_base_url + endpoints + records_seeded + records_generated
 ```
 
 ## 13. Future Extensions

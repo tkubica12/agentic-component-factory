@@ -21,6 +21,8 @@ class CreateMockApiResult(BaseModel):
     cosmos_container: str | None = Field(default=None)
     container_app_name: str | None = Field(default=None)
     endpoints: list[EndpointInfo] = Field(default_factory=list)
+    records_seeded: int = Field(default=0, description="Number of sample records seeded")
+    records_generated: int = Field(default=0, description="Number of synthetic records generated")
     error: str | None = Field(default=None)
 
 

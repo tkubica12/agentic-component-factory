@@ -69,3 +69,33 @@ def schema_summary(schema: dict) -> str:
         lines.append(f"  - {f['name']}: {f['type']} ({req})")
     id_note = f"ID field: {schema['id_field']}" if schema["id_field"] else "No id field detected — UUIDs will be generated"
     return f"Fields:\n" + "\n".join(lines) + f"\n{id_note}\nPartition key: {schema['partition_key']}"
+
+
+def pydantic_field_type(field_type: str) -> str:
+    """Map our schema type to Python type annotation string."""
+    mapping = {
+        "string": "str",
+        "integer": "int",
+        "number": "float",
+        "boolean": "bool",
+        "array": "list",
+        "object": "dict",
+    }
+    return mapping.get(field_type, "str")
+
+
+def schema_to_pydantic_def(schema: dict, class_name: str = "Record") -> str:
+    """Generate a Pydantic model class definition string from the inferred schema.
+
+    The id field is excluded (generated separately).
+    """
+    lines = [f"class {class_name}(BaseModel):"]
+    for f in schema["fields"]:
+        if f["name"] == schema.get("id_field"):
+            continue
+        py_type = pydantic_field_type(f["type"])
+        lines.append(f"    {f['name']}: {py_type}")
+    lines.append("")
+    lines.append(f"class {class_name}List(BaseModel):")
+    lines.append(f"    items: list[{class_name}]")
+    return "\n".join(lines)

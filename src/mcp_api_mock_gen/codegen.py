@@ -1,12 +1,12 @@
 """Copilot SDK orchestration - generate and deploy CRUD API as a Docker container.
 
 Creates a Copilot SDK session with custom tools (skills) and a detailed prompt,
-then lets the agent generate FastAPI code + Dockerfile and deploy to Azure Container Apps.
+then lets the agent generate FastAPI code + Dockerfile + optional data generation script
+and deploy to Azure Container Apps.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -18,19 +18,20 @@ from copilot import CopilotClient
 from copilot.types import Tool, PermissionRequestResult
 
 from .config import Settings
-from .schema import infer_schema, schema_summary
+from .schema import infer_schema, schema_summary, schema_to_pydantic_def
 from .skills.acr import AcrSkills
 from .skills.container_apps import ContainerAppsSkills
 from .skills.cosmos import CosmosSkills
+from .skills.scripts import ScriptSkills
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a code generation agent that creates CRUD REST APIs packaged as Docker containers.
+SYSTEM_PROMPT_BASE = """You are a code generation agent that creates CRUD REST APIs packaged as Docker containers.
 You will be given a resource name, its schema, and sample records.
 
 Your job:
 1. Generate a Python FastAPI project with a Dockerfile.
-2. Use the provided tools to create CosmosDB infrastructure, build the image, deploy as a Container App, and smoke test.
+2. Use the provided tools to build the image, deploy as a Container App, and smoke test.
 
 CRITICAL: You are running in FULLY AUTONOMOUS mode. NEVER ask the user questions.
 If a tool call fails, read the error message carefully, fix the code, and retry.
@@ -62,7 +63,7 @@ IMPORTANT RULES - generate EXACTLY these files in the current working directory:
      DELETE /api/{resource}/{{id}} - Delete
    - At the bottom: if __name__ == "__main__": uvicorn.run(app, host="0.0.0.0", port=8000)
 
-2. requirements.txt - EXACTLY these lines, nothing else:
+2. requirements.txt - EXACTLY these lines:
    fastapi
    uvicorn[standard]
    azure-cosmos
@@ -76,21 +77,97 @@ IMPORTANT RULES - generate EXACTLY these files in the current working directory:
    COPY . .
    EXPOSE 8000
    CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+"""
 
+SYSTEM_PROMPT_DEPLOY_ONLY = SYSTEM_PROMPT_BASE + """
 AFTER generating ALL 3 files, call tools in this exact order:
 1. build_image - build Docker image via ACR remote build (if it fails, fix the code and retry)
 2. create_container_app - deploy the container
 3. smoke_test - verify the API returns HTTP 200 on GET /api/{resource}
 
+CosmosDB container creation and data seeding are already done.
 After all steps complete, report the final API URL and endpoints.
+Do NOT ask questions. Execute all steps.
+"""
+
+SYSTEM_PROMPT_WITH_DATAGEN = SYSTEM_PROMPT_BASE + """
+4. generate_data.py - A data generation script that uses Azure OpenAI to generate synthetic records.
+   This script MUST:
+   - Use the openai library with AzureOpenAI client
+   - Use azure.identity.AzureCliCredential with get_bearer_token_provider for Entra auth
+   - Connect to the endpoint from AZURE_OPENAI_ENDPOINT env var using model "gpt-5.2"
+   - Use the Responses API with structured outputs (text_format parameter) to enforce the schema
+   - Define Pydantic models for the record schema (given below) and a list wrapper
+   - Generate records in batches (batch_size items per API call)
+   - For each generated record, add a UUID "id" field
+   - Insert all generated records into CosmosDB using azure.cosmos SDK with AzureCliCredential
+   - Read COSMOS_ENDPOINT, COSMOS_DATABASE, COSMOS_CONTAINER from environment variables
+   - Print progress and final count to stdout
+   - The script structure should be:
+     ```python
+     import os, uuid, json
+     from pydantic import BaseModel
+     from openai import AzureOpenAI
+     from azure.identity import AzureCliCredential, get_bearer_token_provider
+     from azure.cosmos import CosmosClient
+
+     # Pydantic models for structured output
+     <SCHEMA_MODELS>
+
+     # Azure OpenAI setup
+     credential = AzureCliCredential()
+     token_provider = get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default")
+     ai_client = AzureOpenAI(
+         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+         azure_ad_token_provider=token_provider,
+         api_version="2025-03-01-preview",
+     )
+
+     # CosmosDB setup
+     cosmos_client = CosmosClient(os.environ["COSMOS_ENDPOINT"], credential)
+     database = cosmos_client.get_database_client(os.environ["COSMOS_DATABASE"])
+     container = database.get_container_client(os.environ["COSMOS_CONTAINER"])
+
+     # Generate in batches
+     total = <RECORD_COUNT>
+     batch_size = min(20, total)
+     generated = 0
+     for batch_num in range(0, total, batch_size):
+         count = min(batch_size, total - generated)
+         response = ai_client.responses.parse(
+             model="gpt-5.2",
+             input=[{"role": "user", "content": f"Generate {count} realistic <DESCRIPTION>"}],
+             text_format=<LIST_MODEL>,
+         )
+         items = response.output_parsed.items
+         for item in items:
+             doc = item.model_dump()
+             doc["id"] = str(uuid.uuid4())
+             container.upsert_item(doc)
+             generated += 1
+         print(f"Generated {generated}/{total} records")
+     print(f"Done. Total records generated: {generated}")
+     ```
+
+AFTER generating ALL 4 files, call tools in this exact order:
+1. build_image - build Docker image (only main.py, requirements.txt, Dockerfile - NOT generate_data.py)
+2. run_script - execute generate_data.py to populate CosmosDB with synthetic data
+   If it fails, read the error, fix generate_data.py, and run it again.
+3. create_container_app - deploy the container
+4. smoke_test - verify the API returns HTTP 200 and data is available
+
+CosmosDB container creation and sample data seeding are already done.
+After all steps complete, report the final API URL, endpoints, and records generated count.
 Do NOT ask questions. Execute all steps.
 """
 
 
 def _build_prompt(resource_name: str, schema: dict, sample_records: list[dict],
                   deployment_id: str, app_name: str, image_tag: str,
-                  db_name: str, container_name: str) -> str:
-    return f"""Create a CRUD API for resource "{resource_name}".
+                  db_name: str, container_name: str,
+                  record_count: int = 0, data_description: str = "",
+                  pydantic_schema: str = "") -> str:
+    base = f"""Create a CRUD API for resource "{resource_name}".
 
 Schema:
 {schema_summary(schema)}
@@ -104,29 +181,28 @@ Deployment parameters:
 - image_tag: {image_tag}
 - database_name: {db_name}
 - container_name: {container_name}
-
-Generate all 3 files (main.py, requirements.txt, Dockerfile), then use the tools to deploy. Go step by step.
 """
+    if record_count > 0:
+        base += f"""
+Data generation parameters:
+- record_count: {record_count}
+- data_description: {data_description or f"realistic {resource_name} data matching the schema"}
+- Pydantic models to use in generate_data.py for structured outputs:
+```python
+{pydantic_schema}
+```
+
+Generate all 4 files (main.py, requirements.txt, Dockerfile, generate_data.py), then use tools to deploy and generate data.
+"""
+    else:
+        base += "\nGenerate all 3 files (main.py, requirements.txt, Dockerfile), then use the tools to deploy.\n"
+
+    base += "Go step by step."
+    return base
 
 
-def _make_tools(cosmos: CosmosSkills, acr: AcrSkills, aca: ContainerAppsSkills) -> list[Tool]:
+def _make_tools(cosmos: CosmosSkills, acr: AcrSkills, aca: ContainerAppsSkills, scripts: ScriptSkills) -> list[Tool]:
     """Create Copilot SDK Tool definitions wired to skill handlers."""
-
-    def _create_cosmos_container(call_info) -> str:
-        try:
-            a = call_info.get("arguments", {})
-            return cosmos.create_container(a.get("database_name", ""), a.get("container_name", ""), a.get("partition_key_path", "/id"))
-        except Exception as e:
-            logger.exception("create_cosmos_container failed")
-            return json.dumps({"status": "error", "message": str(e)})
-
-    def _seed_cosmos_data(call_info) -> str:
-        try:
-            a = call_info.get("arguments", {})
-            return cosmos.seed_data(a.get("database_name", ""), a.get("container_name", ""), a.get("records", []))
-        except Exception as e:
-            logger.exception("seed_cosmos_data failed")
-            return json.dumps({"status": "error", "message": str(e)})
 
     def _build_image(call_info) -> str:
         try:
@@ -145,10 +221,7 @@ def _make_tools(cosmos: CosmosSkills, acr: AcrSkills, aca: ContainerAppsSkills) 
             return json.dumps({"status": "error", "message": str(e)})
 
     def _smoke_test(call_info) -> str:
-        """HTTP GET to verify the API is accessible. Retries up to 3 times with 15s delay for cold start."""
-        import time
-        import urllib.request
-        import urllib.error
+        import time, urllib.request, urllib.error
         a = call_info.get("arguments", {})
         url = a.get("url", "")
         for attempt in range(3):
@@ -162,25 +235,30 @@ def _make_tools(cosmos: CosmosSkills, acr: AcrSkills, aca: ContainerAppsSkills) 
                 if attempt < 2:
                     time.sleep(15)
                     continue
-                return json.dumps({"status": "error", "http_status": e.code, "body": body, "url": url,
-                                   "message": f"HTTP {e.code}: {body}"})
+                return json.dumps({"status": "error", "http_status": e.code, "body": body, "url": url, "message": f"HTTP {e.code}: {body}"})
             except Exception as e:
                 if attempt < 2:
                     time.sleep(15)
                     continue
                 return json.dumps({"status": "error", "message": f"Smoke test failed: {e}", "url": url})
 
+    def _run_script(call_info) -> str:
+        try:
+            a = call_info.get("arguments", {})
+            return scripts.run_python_script(a.get("script_path", ""), a.get("working_directory", ""))
+        except Exception as e:
+            logger.exception("run_script failed")
+            return json.dumps({"status": "error", "message": str(e)})
+
     return [
-        Tool(name="create_cosmos_container", description="Create a CosmosDB database and container.", handler=_create_cosmos_container,
-             parameters={"type": "object", "properties": {"database_name": {"type": "string"}, "container_name": {"type": "string"}, "partition_key_path": {"type": "string", "default": "/id"}}, "required": ["database_name", "container_name"]}),
-        Tool(name="seed_cosmos_data", description="Insert sample records into CosmosDB.", handler=_seed_cosmos_data,
-             parameters={"type": "object", "properties": {"database_name": {"type": "string"}, "container_name": {"type": "string"}, "records": {"type": "array", "items": {"type": "object"}}}, "required": ["database_name", "container_name", "records"]}),
         Tool(name="build_image", description="Build Docker image via ACR remote build. Returns build errors if any — fix code and retry.", handler=_build_image,
              parameters={"type": "object", "properties": {"image_tag": {"type": "string", "description": "Image name:tag"}, "code_directory": {"type": "string", "description": "Path to directory with Dockerfile"}}, "required": ["image_tag", "code_directory"]}),
         Tool(name="create_container_app", description="Create Azure Container App from ACR image.", handler=_create_container_app,
              parameters={"type": "object", "properties": {"app_name": {"type": "string"}, "image_tag": {"type": "string"}, "database_name": {"type": "string"}, "container_name": {"type": "string"}}, "required": ["app_name", "image_tag", "database_name", "container_name"]}),
-        Tool(name="smoke_test", description="HTTP GET to verify the API is accessible.", handler=_smoke_test,
+        Tool(name="smoke_test", description="HTTP GET to verify the API is accessible. Returns response body.", handler=_smoke_test,
              parameters={"type": "object", "properties": {"url": {"type": "string", "description": "Full URL to test"}}, "required": ["url"]}),
+        Tool(name="run_script", description="Execute a Python script locally. Use this to run generate_data.py. Returns stdout/stderr.", handler=_run_script,
+             parameters={"type": "object", "properties": {"script_path": {"type": "string", "description": "Name of the script file (e.g. generate_data.py)"}, "working_directory": {"type": "string", "description": "Directory containing the script"}}, "required": ["script_path", "working_directory"]}),
     ]
 
 
@@ -188,6 +266,8 @@ async def run_codegen(
     resource_name: str,
     sample_records: list[dict],
     settings: Settings,
+    record_count: int = 0,
+    data_description: str = "",
 ) -> dict[str, Any]:
     """Run the full code generation and deployment pipeline via Copilot SDK."""
     deployment_id = str(uuid.uuid4())[:8]
@@ -198,8 +278,9 @@ async def run_codegen(
     container_name = f"{safe_name}_{deployment_id}"
 
     schema = infer_schema(sample_records)
+    pydantic_schema = schema_to_pydantic_def(schema, class_name=resource_name.capitalize().rstrip("s"))
     work_dir = tempfile.mkdtemp(prefix="mcpgen_")
-    logger.info("Deployment %s: work_dir=%s, app=%s", deployment_id, work_dir, app_name)
+    logger.info("Deployment %s: work_dir=%s, app=%s, record_count=%d", deployment_id, work_dir, app_name, record_count)
 
     cosmos = CosmosSkills(
         endpoint=settings.cosmos_endpoint,
@@ -217,19 +298,30 @@ async def run_codegen(
         managed_identity_client_id=settings.managed_identity_client_id,
         cosmos_endpoint=settings.cosmos_endpoint,
     )
+    scripts = ScriptSkills(env_overrides={
+        "COSMOS_ENDPOINT": settings.cosmos_endpoint,
+        "COSMOS_DATABASE": db_name,
+        "COSMOS_CONTAINER": container_name,
+        "AZURE_OPENAI_ENDPOINT": settings.azure_openai_endpoint,
+    })
 
     try:
-        # Pre-provision CosmosDB and seed data (don't rely on the LLM for this)
+        # Pre-provision CosmosDB and seed sample data
         logger.info("Creating Cosmos container %s/%s...", db_name, container_name)
         cosmos.create_container(db_name, container_name)
-        logger.info("Seeding %d records...", len(sample_records))
+        logger.info("Seeding %d sample records...", len(sample_records))
         cosmos.seed_data(db_name, container_name, sample_records)
 
         client = CopilotClient()
         await client.start()
 
-        tools = _make_tools(cosmos, acr, aca)
-        prompt = _build_prompt(resource_name, schema, sample_records, deployment_id, app_name, image_tag, db_name, container_name)
+        tools = _make_tools(cosmos, acr, aca, scripts)
+        system_prompt = SYSTEM_PROMPT_WITH_DATAGEN if record_count > 0 else SYSTEM_PROMPT_DEPLOY_ONLY
+        prompt = _build_prompt(
+            resource_name, schema, sample_records,
+            deployment_id, app_name, image_tag, db_name, container_name,
+            record_count, data_description, pydantic_schema,
+        )
 
         def _auto_approve(req, meta):
             return PermissionRequestResult(kind="approved", rules=[])
@@ -240,7 +332,7 @@ async def run_codegen(
 
         session = await client.create_session({
             "model": "gpt-4.1",
-            "system_message": {"mode": "append", "content": SYSTEM_PROMPT},
+            "system_message": {"mode": "append", "content": system_prompt},
             "working_directory": work_dir,
             "on_permission_request": _auto_approve,
             "tools": tools,
@@ -248,7 +340,7 @@ async def run_codegen(
         session.on(_on_event)
 
         logger.info("Sending codegen prompt to Copilot SDK...")
-        response = await session.send_and_wait({"prompt": prompt}, timeout=600)
+        response = await session.send_and_wait({"prompt": prompt}, timeout=900)
 
         response_text = ""
         if response and hasattr(response, "data") and hasattr(response.data, "content"):
@@ -276,6 +368,8 @@ async def run_codegen(
             "cosmos_container": container_name,
             "container_app_name": app_name,
             "endpoints": endpoints,
+            "records_seeded": len(sample_records),
+            "records_generated": record_count,
             "error": None if url else "Deployment did not complete",
         }
 

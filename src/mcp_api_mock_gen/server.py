@@ -23,8 +23,13 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-async def create_mock_api(name: str, sample_records: list[dict]) -> dict:
-    """Create a CRUD REST API from sample data.
+async def create_mock_api(
+    name: str,
+    sample_records: list[dict],
+    record_count: int = 0,
+    data_description: str = "",
+) -> dict:
+    """Create a CRUD REST API from sample data, optionally with synthetic data generation.
 
     Generates a FastAPI application in a Docker container backed by CosmosDB serverless.
     Returns a deployment_id that can be used to delete the API later.
@@ -32,15 +37,17 @@ async def create_mock_api(name: str, sample_records: list[dict]) -> dict:
     Args:
         name: Resource name for the API (e.g. 'products', 'users').
         sample_records: One or more JSON records defining the schema and seed data.
+        record_count: Number of additional synthetic records to generate (0 = no generation).
+        data_description: Natural language description of the data to guide generation.
     """
     from .codegen import run_codegen
     from .config import Settings
     from .contracts import CreateMockApiResult, EndpointInfo
 
-    logger.info("create_mock_api called: name=%s, records=%d", name, len(sample_records))
+    logger.info("create_mock_api called: name=%s, records=%d, record_count=%d", name, len(sample_records), record_count)
 
     settings = Settings.from_env()
-    result = await run_codegen(name, sample_records, settings)
+    result = await run_codegen(name, sample_records, settings, record_count, data_description)
 
     api_result = CreateMockApiResult(
         deployment_id=result.get("deployment_id", ""),
@@ -51,6 +58,8 @@ async def create_mock_api(name: str, sample_records: list[dict]) -> dict:
         cosmos_container=result.get("cosmos_container"),
         container_app_name=result.get("container_app_name"),
         endpoints=[EndpointInfo(**ep) for ep in result.get("endpoints", [])],
+        records_seeded=result.get("records_seeded", 0),
+        records_generated=result.get("records_generated", 0),
         error=result.get("error"),
     )
 

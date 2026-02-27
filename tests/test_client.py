@@ -1,7 +1,7 @@
 """Test client for the MCP server using FastMCP Client.
 
-Tests both create_mock_api and delete_mock_api, and verifies
-that the deployed API actually works with CRUD operations.
+Tests create_mock_api (with and without data generation) and delete_mock_api,
+and verifies that the deployed API actually works with CRUD operations.
 """
 
 import asyncio
@@ -53,7 +53,6 @@ def _extract_field(result, field):
 
 
 def _http(method, url, body=None, timeout=30):
-    """Simple HTTP helper that returns (status, body_str)."""
     data = json.dumps(body).encode() if body else None
     req = urllib.request.Request(url, method=method, data=data)
     if data:
@@ -66,7 +65,6 @@ def _http(method, url, body=None, timeout=30):
 
 
 def _wait_for_ready(base_url, resource, max_wait=90):
-    """Wait for the container to be ready, retrying every 10s."""
     url = f"{base_url}/api/{resource}"
     for i in range(max_wait // 10):
         try:
@@ -80,8 +78,8 @@ def _wait_for_ready(base_url, resource, max_wait=90):
     return False
 
 
-def test_crud(base_url, resource):
-    """Test all CRUD operations on the deployed API. Returns (passed, failed) counts."""
+def test_crud(base_url, resource, expected_min_records=3):
+    """Test CRUD operations. Returns (passed, failed) counts."""
     passed = 0
     failed = 0
 
@@ -96,11 +94,13 @@ def test_crud(base_url, resource):
 
     url = f"{base_url}/api/{resource}"
 
-    # GET list — should return seeded data
+    # GET list
     status, body = _http("GET", url)
     check("GET list returns 200", status == 200, f"got {status}")
     items = json.loads(body) if status == 200 else []
-    check("GET list returns seeded records", len(items) >= 3, f"got {len(items)} items")
+    check(f"GET list has >= {expected_min_records} records", len(items) >= expected_min_records, f"got {len(items)} items")
+    if items:
+        print(f"  INFO: Total records in API: {len(items)}")
 
     # GET by ID
     status, body = _http("GET", f"{url}/1")
@@ -109,36 +109,32 @@ def test_crud(base_url, resource):
         item = json.loads(body)
         check("GET /1 has correct name", item.get("name") == "Wireless Mouse", f"got {item.get('name')}")
 
-    # POST new record
-    new_item = {"id": "test-99", "name": "Test Widget", "price": 5.0, "category": "test", "in_stock": True}
+    # POST
+    new_item = {"id": "test-crud", "name": "Test Widget", "price": 5.0, "category": "test", "in_stock": True}
     status, body = _http("POST", url, new_item)
     check("POST returns 200/201", status in (200, 201), f"got {status}")
     created_id = None
     if status in (200, 201):
-        created = json.loads(body)
-        created_id = created.get("id", "test-99")
+        created_id = json.loads(body).get("id", "test-crud")
 
-    # GET the new record (use the ID returned by POST, which may be auto-generated)
     if created_id:
+        # GET created
         status, body = _http("GET", f"{url}/{created_id}")
-        check("GET created record returns 200", status == 200, f"got {status} for id={created_id}")
+        check("GET created returns 200", status == 200, f"got {status}")
 
-        # PATCH the record
+        # PATCH
         status, body = _http("PATCH", f"{url}/{created_id}", {"price": 7.5})
         check("PATCH returns 200", status == 200, f"got {status}")
         if status == 200:
-            patched = json.loads(body)
-            check("PATCH updated price", patched.get("price") == 7.5, f"got {patched.get('price')}")
+            check("PATCH updated price", json.loads(body).get("price") == 7.5)
 
-        # DELETE the record
+        # DELETE
         status, body = _http("DELETE", f"{url}/{created_id}")
         check("DELETE returns 200/204", status in (200, 204), f"got {status}")
 
         # Verify deleted
         status, body = _http("GET", f"{url}/{created_id}")
-        check("GET deleted record returns 404", status == 404, f"got {status}")
-    else:
-        check("POST returned a valid record", False, "no id in response")
+        check("GET deleted returns 404", status == 404, f"got {status}")
 
     return passed, failed
 
@@ -152,13 +148,18 @@ async def main():
         tools = await client.list_tools()
         print(f"\nAvailable tools: {[t.name for t in tools]}")
 
-        # --- Create ---
+        # === Test 1: Create with data generation ===
         print(f"\n{'='*60}")
-        print(f"STEP 1: create_mock_api('products', {len(SAMPLE_PRODUCTS)} records)")
+        print("TEST: create_mock_api with synthetic data generation")
         print(f"{'='*60}")
         result = await client.call_tool(
             "create_mock_api",
-            {"name": "products", "sample_records": SAMPLE_PRODUCTS},
+            {
+                "name": "products",
+                "sample_records": SAMPLE_PRODUCTS,
+                "record_count": 10,
+                "data_description": "realistic tech products with varied categories (electronics, accessories, peripherals, cables) and realistic pricing between $5 and $500",
+            },
             raise_on_error=False,
             timeout=900,
         )
@@ -173,21 +174,20 @@ async def main():
             print("\nCREATE FAILED — cannot test CRUD. Exiting.")
             return
 
-        # --- CRUD tests ---
+        # CRUD tests — expect at least 3 seeded + some generated
         print(f"\n{'='*60}")
-        print(f"STEP 2: Testing CRUD at {api_url}")
+        print(f"Testing CRUD at {api_url}")
         print(f"{'='*60}")
 
-        print("\nWaiting for container to be ready...")
-        if not _wait_for_ready(api_url, "products"):
-            print("API never became ready. Skipping CRUD tests.")
-        else:
-            passed, failed = test_crud(api_url, "products")
+        if _wait_for_ready(api_url, "products"):
+            passed, failed = test_crud(api_url, "products", expected_min_records=5)
             print(f"\nCRUD Tests: {passed} passed, {failed} failed")
+        else:
+            print("API never became ready.")
 
-        # --- Delete ---
+        # Delete
         print(f"\n{'='*60}")
-        print(f"STEP 3: delete_mock_api('{deployment_id}')")
+        print(f"delete_mock_api('{deployment_id}')")
         print(f"{'='*60}")
         delete_result = await client.call_tool(
             "delete_mock_api",

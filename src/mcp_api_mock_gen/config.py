@@ -18,6 +18,7 @@ class Settings:
     aca_environment_name: str
     managed_identity_id: str
     managed_identity_client_id: str
+    azure_openai_endpoint: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -38,4 +39,5 @@ class Settings:
             aca_environment_name=_require("ACA_ENVIRONMENT_NAME"),
             managed_identity_id=_require("MANAGED_IDENTITY_ID"),
             managed_identity_client_id=_require("MANAGED_IDENTITY_CLIENT_ID"),
+            azure_openai_endpoint=_require("AZURE_OPENAI_ENDPOINT"),
         )
