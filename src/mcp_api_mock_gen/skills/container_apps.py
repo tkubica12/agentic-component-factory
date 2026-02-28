@@ -50,7 +50,7 @@ class ContainerAppsSkills:
             "--image", full_image,
             "--target-port", "8000",
             "--ingress", "external",
-            "--min-replicas", "0",
+            "--min-replicas", "1",
             "--max-replicas", "1",
             "--cpu", "0.25",
             "--memory", "0.5Gi",
@@ -63,6 +63,17 @@ class ContainerAppsSkills:
             f"COSMOS_CONTAINER={container_name}",
             f"AZURE_CLIENT_ID={self.managed_identity_client_id}",
         ])
+
+        # Enable CORS for all origins
+        await az_async([
+            "containerapp", "cors", "enable",
+            "--name", app_name,
+            "--resource-group", self.resource_group,
+            "--subscription", self.subscription_id,
+            "--allowed-origins", "*",
+            "--allowed-methods", "*",
+            "--allowed-headers", "*",
+        ], check=False)
 
         # Get the FQDN
         _, stdout, _ = await az_async([
