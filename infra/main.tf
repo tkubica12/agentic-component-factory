@@ -221,6 +221,12 @@ resource "azurerm_container_app" "mcp_server" {
     }
   }
 
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image,
+    ]
+  }
+
   template {
     min_replicas = 3
     max_replicas = 10
