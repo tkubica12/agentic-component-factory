@@ -105,7 +105,7 @@ async def main():
             "name": "products", "sample_records": SAMPLE_PRODUCTS,
             "record_count": 10,
             "data_description": "realistic tech products $5-$500",
-        }, raise_on_error=False, timeout=30)
+        }, raise_on_error=False, timeout=120)
         data = _parse(result)
         dep_id = data.get("deployment_id")
         print(f"  Started: deployment_id={dep_id}")
