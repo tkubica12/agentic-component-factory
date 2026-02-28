@@ -228,14 +228,14 @@ resource "azurerm_container_app" "mcp_server" {
   }
 
   template {
-    min_replicas = 3
-    max_replicas = 10
+    min_replicas = 1
+    max_replicas = 1
 
     container {
       name   = "mcp-server"
       image  = var.mcp_server_image
-      cpu    = 1
-      memory = "2Gi"
+      cpu    = 2
+      memory = "4Gi"
 
       env {
         name  = "AZURE_SUBSCRIPTION_ID"
