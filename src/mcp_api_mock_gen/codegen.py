@@ -231,18 +231,18 @@ Generate all 4 files (main.py, requirements.txt, Dockerfile, generate_data.py), 
 def _make_tools(cosmos: CosmosSkills, acr: AcrSkills, aca: ContainerAppsSkills, scripts: ScriptSkills) -> list[Tool]:
     """Create Copilot SDK Tool definitions wired to skill handlers."""
 
-    def _build_image(call_info) -> str:
+    async def _build_image(call_info) -> str:
         try:
             a = call_info.get("arguments", {})
-            return acr.build_image(a.get("image_tag", ""), a.get("code_directory", ""))
+            return await acr.build_image(a.get("image_tag", ""), a.get("code_directory", ""))
         except Exception as e:
             logger.exception("build_image failed")
             return json.dumps({"status": "error", "message": str(e)})
 
-    def _create_container_app(call_info) -> str:
+    async def _create_container_app(call_info) -> str:
         try:
             a = call_info.get("arguments", {})
-            return aca.create_container_app(a.get("app_name", ""), a.get("image_tag", ""), a.get("database_name", ""), a.get("container_name", ""))
+            return await aca.create_container_app(a.get("app_name", ""), a.get("image_tag", ""), a.get("database_name", ""), a.get("container_name", ""))
         except Exception as e:
             logger.exception("create_container_app failed")
             return json.dumps({"status": "error", "message": str(e)})
@@ -269,10 +269,10 @@ def _make_tools(cosmos: CosmosSkills, acr: AcrSkills, aca: ContainerAppsSkills, 
                     continue
                 return json.dumps({"status": "error", "message": f"Smoke test failed: {e}", "url": url})
 
-    def _run_script(call_info) -> str:
+    async def _run_script(call_info) -> str:
         try:
             a = call_info.get("arguments", {})
-            return scripts.run_python_script(a.get("script_path", ""), a.get("working_directory", ""))
+            return await scripts.run_python_script(a.get("script_path", ""), a.get("working_directory", ""))
         except Exception as e:
             logger.exception("run_script failed")
             return json.dumps({"status": "error", "message": str(e)})
@@ -339,7 +339,7 @@ async def run_codegen(
     try:
         # Pre-provision CosmosDB and seed sample data
         logger.info("Creating Cosmos container %s/%s...", db_name, container_name)
-        cosmos.create_container(db_name, container_name)
+        await cosmos.create_container(db_name, container_name)
         logger.info("Seeding %d sample records...", len(sample_records))
         cosmos.seed_data(db_name, container_name, sample_records)
 

@@ -209,6 +209,12 @@ resource "azurerm_container_app" "mcp_server" {
     target_port      = 8000
     transport        = "auto"
 
+    ip_security_restriction {
+      action           = "Allow"
+      ip_address_range = "0.0.0.0/0"
+      name             = "allow-all"
+    }
+
     traffic_weight {
       latest_revision = true
       percentage      = 100
@@ -216,14 +222,14 @@ resource "azurerm_container_app" "mcp_server" {
   }
 
   template {
-    min_replicas = 1
-    max_replicas = 1
+    min_replicas = 3
+    max_replicas = 10
 
     container {
       name   = "mcp-server"
       image  = var.mcp_server_image
-      cpu    = 2
-      memory = "4Gi"
+      cpu    = 1
+      memory = "2Gi"
 
       env {
         name  = "AZURE_SUBSCRIPTION_ID"

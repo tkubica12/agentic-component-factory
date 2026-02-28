@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import os
-import subprocess
 from typing import Any
 
 from dotenv import load_dotenv
@@ -127,6 +126,7 @@ async def delete_mock_api(deployment_id: str) -> dict:
         deployment_id: The deployment_id returned by create_mock_api.
     """
     from .config import Settings
+    from .skills.az_helpers import az_async
     from .skills.container_apps import ContainerAppsSkills
     from .skills.cosmos import CosmosSkills
 
@@ -136,16 +136,15 @@ async def delete_mock_api(deployment_id: str) -> dict:
     errors = []
 
     try:
-        result = subprocess.run(
-            ["az", "containerapp", "list", "--resource-group", settings.azure_resource_group,
-             "--subscription", settings.azure_subscription_id, "--query", f"[?ends_with(name, '-{deployment_id}')].name",
-             "--output", "json"],
-            capture_output=True, text=True, timeout=60, shell=(os.name == "nt"),
+        _, stdout, _ = await az_async(
+            ["containerapp", "list", "--resource-group", settings.azure_resource_group,
+             "--subscription", settings.azure_subscription_id, "--query", f"[?ends_with(name, '-{deployment_id}')].name"],
+            check=False, timeout=60,
         )
-        app_names = json.loads(result.stdout) if result.stdout.strip() else []
+        app_names = json.loads(stdout) if stdout.strip() else []
         for app_name in app_names:
             logger.info("Deleting container app: %s", app_name)
-            ContainerAppsSkills.delete_container_app(app_name, settings.azure_resource_group, settings.azure_subscription_id)
+            await ContainerAppsSkills.delete_container_app(app_name, settings.azure_resource_group, settings.azure_subscription_id)
     except Exception as e:
         errors.append(f"Container app deletion: {e}")
 
@@ -156,20 +155,19 @@ async def delete_mock_api(deployment_id: str) -> dict:
         subscription_id=settings.azure_subscription_id,
     )
     try:
-        result = subprocess.run(
-            ["az", "cosmosdb", "sql", "container", "list",
+        _, stdout, _ = await az_async(
+            ["cosmosdb", "sql", "container", "list",
              "--account-name", settings.cosmos_account_name,
              "--resource-group", settings.azure_resource_group,
              "--subscription", settings.azure_subscription_id,
              "--database-name", "mockapi",
-             "--query", f"[?ends_with(name, '_{deployment_id}')].name",
-             "--output", "json"],
-            capture_output=True, text=True, timeout=60, shell=(os.name == "nt"),
+             "--query", f"[?ends_with(name, '_{deployment_id}')].name"],
+            check=False, timeout=60,
         )
-        container_names = json.loads(result.stdout) if result.stdout.strip() else []
+        container_names = json.loads(stdout) if stdout.strip() else []
         for cname in container_names:
             logger.info("Deleting cosmos container: %s", cname)
-            cosmos.delete_container("mockapi", cname)
+            await cosmos.delete_container("mockapi", cname)
     except Exception as e:
         errors.append(f"Cosmos container deletion: {e}")
 

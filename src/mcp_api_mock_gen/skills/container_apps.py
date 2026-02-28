@@ -7,19 +7,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import subprocess
+
+from .az_helpers import az_async
 
 logger = logging.getLogger(__name__)
-
-
-def _az(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    cmd = ["az"] + args + ["--output", "json"]
-    logger.info("az %s", " ".join(args[:10]))
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, shell=(os.name == "nt"))
-    if check and result.returncode != 0:
-        raise RuntimeError(f"az command failed: {result.stderr}")
-    return result
 
 
 class ContainerAppsSkills:
@@ -44,13 +35,13 @@ class ContainerAppsSkills:
         self.cosmos_endpoint = cosmos_endpoint
         self.app_url: str | None = None
 
-    def create_container_app(
+    async def create_container_app(
         self, app_name: str, image_tag: str, database_name: str, container_name: str
     ) -> str:
         """Create a Container App from an ACR image with smallest sizing and external ingress."""
         full_image = f"{self.acr_login_server}/{image_tag}"
 
-        _az([
+        await az_async([
             "containerapp", "create",
             "--name", app_name,
             "--resource-group", self.resource_group,
@@ -74,24 +65,24 @@ class ContainerAppsSkills:
         ])
 
         # Get the FQDN
-        result = _az([
+        _, stdout, _ = await az_async([
             "containerapp", "show",
             "--name", app_name,
             "--resource-group", self.resource_group,
             "--subscription", self.subscription_id,
             "--query", "properties.configuration.ingress.fqdn",
         ])
-        fqdn = json.loads(result.stdout).strip('"') if result.stdout.strip() else ""
+        fqdn = json.loads(stdout).strip('"') if stdout.strip() else ""
         self.app_url = f"https://{fqdn}" if fqdn else None
 
         logger.info("Created container app %s at %s", app_name, self.app_url)
         return json.dumps({"status": "ok", "app_name": app_name, "url": self.app_url})
 
     @staticmethod
-    def delete_container_app(app_name: str, resource_group: str, subscription_id: str) -> str:
+    async def delete_container_app(app_name: str, resource_group: str, subscription_id: str) -> str:
         """Delete a Container App."""
         try:
-            _az([
+            await az_async([
                 "containerapp", "delete",
                 "--name", app_name,
                 "--resource-group", resource_group,

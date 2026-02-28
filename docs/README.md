@@ -116,6 +116,12 @@ data, then build a frontend connected to them.
 Check your Azure portal to see the Container Apps, CosmosDB collections, and
 ACR images that were created.
 
+![](/images/cosmosdb.png)
+
+![](/images/acr.png)
+
+![](/images/resources.png)
+
 ## MCP tools
 
 The server uses an async pattern: `create_mock_api` starts a background job

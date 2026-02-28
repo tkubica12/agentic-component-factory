@@ -9,27 +9,14 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 from typing import Any
 
 from azure.cosmos import CosmosClient
 from azure.identity import AzureCliCredential
 
+from .az_helpers import az_async
+
 logger = logging.getLogger(__name__)
-
-
-def _az(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    """Run an Azure CLI command and return the result."""
-    cmd = ["az"] + args + ["--output", "json"]
-    logger.info("az %s", " ".join(args))
-    result = subprocess.run(
-        " ".join(cmd) if os.name == "nt" else cmd,
-        capture_output=True, text=True, timeout=120,
-        shell=(os.name == "nt"),
-    )
-    if check and result.returncode != 0:
-        raise RuntimeError(f"az {' '.join(args)} failed: {result.stderr}")
-    return result
 
 
 class CosmosSkills:
@@ -57,9 +44,9 @@ class CosmosSkills:
         """No-op for sync client, kept for interface compatibility."""
         pass
 
-    def create_container(self, database_name: str, container_name: str, partition_key_path: str = "/id") -> str:
+    async def create_container(self, database_name: str, container_name: str, partition_key_path: str = "/id") -> str:
         """Create a CosmosDB database and container using Azure CLI (control plane)."""
-        _az([
+        await az_async([
             "cosmosdb", "sql", "database", "create",
             "--account-name", self.account_name,
             "--resource-group", self.resource_group,
@@ -67,7 +54,7 @@ class CosmosSkills:
             "--name", database_name,
         ], check=False)
 
-        _az([
+        await az_async([
             "cosmosdb", "sql", "container", "create",
             "--account-name", self.account_name,
             "--resource-group", self.resource_group,
@@ -101,9 +88,9 @@ class CosmosSkills:
         logger.info("Seeded %d records into %s/%s", count, database_name, container_name)
         return json.dumps({"status": "ok", "records_seeded": count})
 
-    def delete_container(self, database_name: str, container_name: str) -> str:
+    async def delete_container(self, database_name: str, container_name: str) -> str:
         """Delete a CosmosDB container using Azure CLI."""
-        _az([
+        await az_async([
             "cosmosdb", "sql", "container", "delete",
             "--account-name", self.account_name,
             "--resource-group", self.resource_group,
