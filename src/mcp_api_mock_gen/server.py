@@ -54,14 +54,9 @@ async def create_mock_api(
         record_count: Number of additional synthetic records to generate (0 = none).
         data_description: Natural language description to guide data generation.
     """
-    from .codegen import run_codegen
-    from .config import Settings
-
     logger.info("create_mock_api called: name=%s, records=%d, record_count=%d", name, len(sample_records), record_count)
 
-    settings = Settings.from_env()
-
-    # Generate a deployment_id immediately
+    # Generate deployment_id immediately — no imports, no I/O
     import uuid
     deployment_id = str(uuid.uuid4())[:8]
 
@@ -80,9 +75,12 @@ async def create_mock_api(
         "error": None,
     }
 
-    # Start background task
+    # Start background task (all heavy work happens here)
     async def _run():
         try:
+            from .codegen import run_codegen
+            from .config import Settings
+            settings = Settings.from_env()
             result = await run_codegen(name, sample_records, settings, record_count, data_description, deployment_id)
             _jobs[deployment_id].update({
                 "status": result["status"],
