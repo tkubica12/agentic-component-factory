@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 
-from azure.identity import DefaultAzureCredential
+from azure.identity.aio import DefaultAzureCredential
 from azure.servicebus.aio import ServiceBusClient
 
 from .config import Settings
