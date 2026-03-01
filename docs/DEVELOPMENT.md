@@ -14,8 +14,8 @@ Local development, building, and testing instructions for contributors.
 
 ```bash
 # Clone and install
-git clone https://github.com/tkubica12/mcp-api-mock-gen.git
-cd mcp-api-mock-gen
+git clone https://github.com/tkubica12/agentic-component-factory.git
+cd agentic-component-factory
 uv sync
 
 # Configure environment
@@ -56,9 +56,9 @@ The worker connects to Service Bus, listens for messages on the `mock-api-jobs` 
 
 ```bash
 # MCP server
-docker build -t mcp-api-mock-gen .
+docker build -t agentic-component-factory .
 # Worker
-docker build -f Dockerfile.worker -t mcp-api-mock-gen-worker .
+docker build -f Dockerfile.worker -t agentic-component-factory-worker .
 ```
 
 ### Build via ACR
@@ -71,8 +71,8 @@ az acr build --registry YOUR_ACR_NAME --image mcp-api-mock-gen-worker:latest -f 
 ### Push to GHCR (done automatically by GitHub Actions)
 
 The `.github/workflows/build.yml` workflow builds and pushes both images on every push to `main`:
-- `ghcr.io/tkubica12/mcp-api-mock-gen:latest` (server)
-- `ghcr.io/tkubica12/mcp-api-mock-gen-worker:latest` (worker)
+- `ghcr.io/tkubica12/agentic-component-factory:latest` (server)
+- `ghcr.io/tkubica12/agentic-component-factory-worker:latest` (worker)
 
 ## Project structure
 

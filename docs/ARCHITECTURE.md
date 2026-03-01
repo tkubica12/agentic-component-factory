@@ -117,8 +117,8 @@ All shared infrastructure provisioned by Terraform:
 | Container Apps Environment | No Log Analytics |
 | AI Foundry | `kind=AIServices`, gpt-5.3-codex GlobalStandard deployment |
 | User-assigned MI | Cosmos RBAC, ACR Pull, OpenAI User, Service Bus sender/receiver, Contributor on RG, Reader on sub |
-| MCP server Container App | Lightweight, 1 replica, with ingress, deployed from GHCR (`mcp-api-mock-gen:latest`) |
-| Worker Container App | 3-10 replicas, KEDA scaling on queue depth, no ingress, deployed from GHCR (`mcp-api-mock-gen-worker:latest`) |
+| MCP server Container App | Lightweight, 1 replica, with ingress, deployed from GHCR (`agentic-component-factory:latest`) |
+| Worker Container App | 3-10 replicas, KEDA scaling on queue depth, no ingress, deployed from GHCR (`agentic-component-factory-worker:latest`) |
 
 Container Apps for generated APIs are **not** Terraform-managed — created/deleted at runtime via `az` CLI.
 

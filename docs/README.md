@@ -1,4 +1,4 @@
-# mcp-api-mock-gen
+# agentic-component-factory
 
 ## The problem
 
@@ -46,7 +46,7 @@ In that model:
 - The result is a **running component with integration contract** (URL, schema,
   credentials/identity assumptions, and health signal), not just source files.
 
-`mcp-api-mock-gen` is the first concrete capability in this direction: a mock
+`agentic-component-factory` is the first concrete capability in this direction: a mock
 API generator with autonomous deployment and data seeding.
 
 ## How it works

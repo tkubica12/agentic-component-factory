@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
-    "mcp-api-mock-gen",
+    "agentic-component-factory",
     instructions=(
         "MCP server that generates and deploys CRUD REST APIs from sample JSON data.\n"
         "Workflow:\n"

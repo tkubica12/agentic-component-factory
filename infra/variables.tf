@@ -24,11 +24,11 @@ variable "mcp_api_key" {
 variable "mcp_server_image" {
   description = "Docker image for the MCP server"
   type        = string
-  default     = "ghcr.io/tkubica12/mcp-api-mock-gen:latest"
+  default     = "ghcr.io/tkubica12/agentic-component-factory:latest"
 }
 
 variable "worker_image" {
   description = "Docker image for the worker"
   type        = string
-  default     = "ghcr.io/tkubica12/mcp-api-mock-gen-worker:latest"
+  default     = "ghcr.io/tkubica12/agentic-component-factory-worker:latest"
 }

@@ -27,7 +27,7 @@ resource "random_string" "suffix" {
 locals {
   suffix = random_string.suffix.result
   tags = {
-    project         = "mcp-api-mock-gen"
+    project         = "agentic-component-factory"
     SecurityControl = "ignore"
   }
 }

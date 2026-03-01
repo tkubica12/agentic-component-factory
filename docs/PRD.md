@@ -2,7 +2,7 @@
 
 ## Overview
 
-`mcp-api-mock-gen` is a FastMCP server that lets an AI agent create a mock REST API from sample JSON records. It orchestrates code generation, Docker build, and deployment to Azure Container Apps with CosmosDB serverless as the data store.
+`agentic-component-factory` is a FastMCP server that lets an AI agent create a mock REST API from sample JSON records. It orchestrates code generation, Docker build, and deployment to Azure Container Apps with CosmosDB serverless as the data store.
 
 ## Problem
 
