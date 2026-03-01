@@ -296,8 +296,13 @@ async def run_codegen(
     record_count: int = 0,
     data_description: str = "",
     deployment_id: str = "",
+    on_status: Any = None,
 ) -> dict[str, Any]:
-    """Run the full code generation and deployment pipeline via Copilot SDK."""
+    """Run the full code generation and deployment pipeline via Copilot SDK.
+
+    Args:
+        on_status: Optional callable(status_str) to report progress updates.
+    """
     if not deployment_id:
         deployment_id = str(uuid.uuid4())[:8]
     safe_name = resource_name.lower().replace(" ", "").replace("_", "")[:20]
@@ -336,13 +341,20 @@ async def run_codegen(
         "AZURE_CLIENT_ID": os.environ.get("AZURE_CLIENT_ID", ""),
     })
 
+    def _report(status: str) -> None:
+        if on_status:
+            on_status(status)
+        logger.info("Status: %s", status)
+
     try:
         # Pre-provision CosmosDB and seed sample data
+        _report("provisioning")
         logger.info("Creating Cosmos container %s/%s...", db_name, container_name)
         await cosmos.create_container(db_name, container_name)
         logger.info("Seeding %d sample records...", len(sample_records))
         cosmos.seed_data(db_name, container_name, sample_records)
 
+        _report("generating_code")
         client = CopilotClient()
         await client.start()
 
@@ -359,6 +371,17 @@ async def run_codegen(
 
         def _on_event(event):
             etype = event.type.value if hasattr(event.type, "value") else event.type
+            # Report progress based on which tool is starting
+            if etype == "tool.execution_start" and hasattr(event, "data"):
+                tool_name = getattr(event.data, "tool_name", None) or getattr(event.data, "name", None) or ""
+                if "build_image" in str(tool_name):
+                    _report("building_image")
+                elif "run_script" in str(tool_name):
+                    _report("generating_data")
+                elif "create_container_app" in str(tool_name):
+                    _report("deploying")
+                elif "smoke_test" in str(tool_name):
+                    _report("smoke_testing")
             logger.info("Copilot event: %s", etype)
 
         # Use Azure BYOK provider — works without GitHub auth

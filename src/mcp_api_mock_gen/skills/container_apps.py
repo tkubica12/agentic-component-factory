@@ -66,7 +66,7 @@ class ContainerAppsSkills:
 
         # Enable CORS for all origins
         await az_async([
-            "containerapp", "cors", "enable",
+            "containerapp", "ingress", "cors", "enable",
             "--name", app_name,
             "--resource-group", self.resource_group,
             "--subscription", self.subscription_id,

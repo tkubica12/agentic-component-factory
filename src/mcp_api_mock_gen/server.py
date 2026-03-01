@@ -89,7 +89,7 @@ async def create_mock_api(
     await _send_to_service_bus(settings.service_bus_namespace, message)
     logger.info("Job %s enqueued to Service Bus", deployment_id)
 
-    return {"deployment_id": deployment_id, "status": "running"}
+    return {"deployment_id": deployment_id, "status": "accepted"}
 
 
 @mcp.tool()

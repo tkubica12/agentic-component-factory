@@ -30,6 +30,10 @@ async def _process_message(msg_body: dict, settings: Settings) -> None:
 
     logger.info("Processing job %s: resource=%s, record_count=%d", deployment_id, name, record_count)
 
+    def _on_status(status: str) -> None:
+        """Report progress back to CosmosDB state table."""
+        update_job(settings.cosmos_endpoint, deployment_id, {"status": status})
+
     try:
         from .codegen import run_codegen
 
@@ -40,6 +44,7 @@ async def _process_message(msg_body: dict, settings: Settings) -> None:
             record_count=record_count,
             data_description=data_description,
             deployment_id=deployment_id,
+            on_status=_on_status,
         )
 
         update_job(settings.cosmos_endpoint, deployment_id, {

@@ -60,9 +60,23 @@ A FastMCP server exposes three tools (`create_mock_api`, `get_deployment_status`
 ## Runtime Flow
 
 ### `create_mock_api(name, sample_records, record_count, data_description)`
-Writes job state to CosmosDB "jobs" container and sends a message to Service Bus queue `mock-api-jobs`. Returns immediately with `deployment_id` + `status: "running"`.
+Writes job state (`accepted`) to CosmosDB "jobs" container and sends a message to Service Bus queue `mock-api-jobs`. Returns immediately with `deployment_id` + `status: "accepted"`.
 
-The Worker picks up the message and:
+The Worker picks up the message and reports progress through these states:
+
+| Status | Description |
+|---|---|
+| `accepted` | Job created, message sent to queue |
+| `provisioning` | Creating CosmosDB container, seeding sample data |
+| `generating_code` | Copilot SDK session started, writing API code |
+| `building_image` | ACR remote build running |
+| `generating_data` | Running data generation script (if record_count > 0) |
+| `deploying` | Creating Container App |
+| `smoke_testing` | Verifying API returns 200 OK |
+| `succeeded` | API is live, URL available |
+| `failed` | Something went wrong, error field has details |
+
+Worker steps:
 1. Creates CosmosDB container via `az` CLI, seeds `sample_records` via sync Cosmos SDK.
 2. Starts Copilot SDK session (Azure OpenAI BYOK, gpt-5.3-codex).
 3. SDK writes files: `main.py`, `Dockerfile`, `requirements.txt`, optionally `generate_data.py`.

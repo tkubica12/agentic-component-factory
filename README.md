@@ -1,4 +1,4 @@
-# mcp-api-mock-gen
+# MCP API mock generator
 
 MCP server that creates live CRUD REST APIs with realistic synthetic data from just a resource name and example records.
 

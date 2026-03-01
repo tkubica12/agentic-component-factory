@@ -40,7 +40,7 @@ def create_job(cosmos_endpoint: str, deployment_id: str, resource_name: str) -> 
     container = _get_container(cosmos_endpoint)
     job = {
         "id": deployment_id,
-        "status": "running",
+        "status": "accepted",
         "resource_name": resource_name,
         "api_base_url": None,
         "cosmos_database": None,
