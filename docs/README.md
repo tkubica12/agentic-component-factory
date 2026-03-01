@@ -1,4 +1,4 @@
-# agentic-component-factory
+# Agentic Component Factory
 
 ## The problem
 
