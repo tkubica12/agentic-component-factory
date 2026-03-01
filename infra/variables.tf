@@ -26,3 +26,9 @@ variable "mcp_server_image" {
   type        = string
   default     = "ghcr.io/tkubica12/mcp-api-mock-gen:latest"
 }
+
+variable "worker_image" {
+  description = "Docker image for the worker"
+  type        = string
+  default     = "ghcr.io/tkubica12/mcp-api-mock-gen-worker:latest"
+}

@@ -2,16 +2,37 @@
 
 ## High-Level Design
 
-A FastMCP server exposes two tools (`create_mock_api`, `delete_mock_api`) that orchestrate API generation and deployment on Azure. The server runs in Azure Container Apps with StreamableHTTP transport, protected by API key (Bearer token). Docker image is published to GHCR and deployed by Terraform.
+A FastMCP server exposes three tools (`create_mock_api`, `get_deployment_status`, `delete_mock_api`). The server is lightweight — it writes job state to a CosmosDB "jobs" container, sends a message to a Service Bus queue, and serves poll requests. A separate Worker service receives messages from the queue and runs the Copilot SDK with all skills (ACR build, data gen, Container Apps deploy, smoke test), writing results back to CosmosDB state. Both services run in Azure Container Apps. Docker images are published to GHCR and deployed by Terraform.
 
 ## Components
 
 ### MCP Server (FastMCP)
 - Exposes `create_mock_api`, `get_deployment_status`, and `delete_mock_api`
-- Async pattern: create starts a background job, clients poll for status
-- In-memory job store tracks deployment state
+- Lightweight: no Copilot SDK, no codegen
+- Writes job state to CosmosDB "jobs" container
+- Sends message to Service Bus queue `mock-api-jobs`
+- Reads state for polling (`get_deployment_status`)
+- 1 replica, with ingress, StreamableHTTP transport, API key protected
 
-### Generation Engine (GitHub Copilot SDK)
+### Worker
+- Receives messages from Service Bus queue `mock-api-jobs`
+- Runs GitHub Copilot SDK (Azure OpenAI BYOK, gpt-5.3-codex)
+- Executes all skills: ACR build, data gen, Container Apps deploy, smoke test
+- Writes results back to CosmosDB "jobs" container
+- 3-10 replicas, scales based on queue depth (KEDA), 2 vCPU / 4Gi each, no ingress
+
+### Service Bus
+- Azure Service Bus Standard tier
+- Queue: `mock-api-jobs`
+- Entra auth (no connection strings/keys)
+- Decouples MCP server from Worker processing
+
+### State Store (CosmosDB "jobs" container)
+- Stores deployment job state (status, results, errors)
+- Shared between MCP server (read/write) and Worker (read/write)
+- Part of the existing CosmosDB serverless account
+
+### Generation Engine (GitHub Copilot SDK) — runs in Worker
 - Azure OpenAI BYOK (gpt-5.3-codex, Responses API wire format)
 - Writes files via built-in file tools: `main.py`, `Dockerfile`, `requirements.txt`, optionally `generate_data.py`
 - Calls custom tools provided by MCP server: `build_image`, `run_script`, `create_container_app`, `smoke_test`
@@ -39,9 +60,9 @@ A FastMCP server exposes two tools (`create_mock_api`, `delete_mock_api`) that o
 ## Runtime Flow
 
 ### `create_mock_api(name, sample_records, record_count, data_description)`
-Starts a background job and returns immediately with `deployment_id` + `status: "running"`.
+Writes job state to CosmosDB "jobs" container and sends a message to Service Bus queue `mock-api-jobs`. Returns immediately with `deployment_id` + `status: "running"`.
 
-The background job:
+The Worker picks up the message and:
 1. Creates CosmosDB container via `az` CLI, seeds `sample_records` via sync Cosmos SDK.
 2. Starts Copilot SDK session (Azure OpenAI BYOK, gpt-5.3-codex).
 3. SDK writes files: `main.py`, `Dockerfile`, `requirements.txt`, optionally `generate_data.py`.
@@ -50,10 +71,10 @@ The background job:
    - **`run_script`** (if `record_count > 0`) — executes `generate_data.py` which calls Azure OpenAI Responses API with Pydantic structured outputs, then inserts records into CosmosDB
    - **`create_container_app`** — deploys the image as a Container App (`az containerapp create`, 0.25 vCPU, 0.5Gi, external ingress, user-assigned MI)
    - **`smoke_test`** — HTTP GET to the deployed Container App, retries up to 3 times, verifies 200 OK
-5. Updates job status to `succeeded` or `failed`.
+5. Updates job state in CosmosDB to `succeeded` or `failed`.
 
 ### `get_deployment_status(deployment_id)`
-Returns current state of a deployment. Poll until `status` is `succeeded` or `failed`.
+Reads current state from CosmosDB "jobs" container. Poll until `status` is `succeeded` or `failed`.
 
 ### `delete_mock_api(deployment_id)`
 1. Find container apps and Cosmos containers by naming convention (suffix = `deployment_id`).
@@ -76,12 +97,14 @@ All shared infrastructure provisioned by Terraform:
 | Resource | Details |
 |---|---|
 | Resource Group | Single RG for all resources |
-| CosmosDB serverless | Entra-only, local auth disabled |
+| CosmosDB serverless | Entra-only, local auth disabled; "jobs" container for state |
+| Service Bus (Standard) | Queue `mock-api-jobs`, Entra auth |
 | Container Registry | Basic SKU, ACR remote build for API images |
 | Container Apps Environment | No Log Analytics |
 | AI Foundry | `kind=AIServices`, gpt-5.3-codex GlobalStandard deployment |
-| User-assigned MI | Cosmos RBAC, ACR Pull, OpenAI User, Contributor on RG, Reader on sub |
-| MCP server Container App | Deployed from GHCR image |
+| User-assigned MI | Cosmos RBAC, ACR Pull, OpenAI User, Service Bus sender/receiver, Contributor on RG, Reader on sub |
+| MCP server Container App | Lightweight, 1 replica, with ingress, deployed from GHCR (`mcp-api-mock-gen:latest`) |
+| Worker Container App | 3-10 replicas, KEDA scaling on queue depth, no ingress, deployed from GHCR (`mcp-api-mock-gen-worker:latest`) |
 
 Container Apps for generated APIs are **not** Terraform-managed — created/deleted at runtime via `az` CLI.
 
@@ -97,7 +120,9 @@ Container Apps for generated APIs are **not** Terraform-managed — created/dele
 
 ```
 src/mcp_api_mock_gen/
-  server.py           FastMCP server (create_mock_api + delete_mock_api)
+  server.py           FastMCP server (create_mock_api + delete_mock_api), lightweight
+  state.py             CosmosDB job state read/write (jobs container)
+  worker.py            Worker: Service Bus listener, runs Copilot SDK per message
   codegen.py           Copilot SDK orchestration, prompts, tool wiring
   config.py            Settings from environment variables
   contracts.py         Pydantic models for MCP I/O
@@ -110,8 +135,13 @@ src/mcp_api_mock_gen/
 tests/
   test_client.py       In-process E2E test (stdio)
   test_remote.py       Remote E2E test (StreamableHTTP)
-infra/                 Terraform for shared infrastructure + MCP server
-run_server.py          Docker entrypoint
+infra/                 Terraform for shared infrastructure + MCP server + Worker
+run_server.py          MCP server Docker entrypoint
+run_worker.py          Worker Docker entrypoint
+Dockerfile             MCP server image
+Dockerfile.worker      Worker image
+entrypoint.sh          MCP server container entrypoint script
+entrypoint_worker.sh   Worker container entrypoint script
 ```
 
 ## Sequence Diagram
@@ -120,6 +150,9 @@ run_server.py          Docker entrypoint
 sequenceDiagram
     participant Agent
     participant MCP as MCP Server
+    participant State as CosmosDB (jobs)
+    participant SB as Service Bus
+    participant Worker
     participant SDK as Copilot SDK
     participant AOAI as Azure OpenAI
     participant Cosmos as Cosmos DB
@@ -127,9 +160,14 @@ sequenceDiagram
     participant ACA as Container Apps
 
     Agent->>MCP: create_mock_api(name, sample_records, ...)
-    MCP->>Cosmos: create container + seed sample records
+    MCP->>State: write job (status: running)
+    MCP->>SB: send message (job payload)
+    MCP-->>Agent: deployment_id + status: running
 
-    MCP->>SDK: start session (AOAI BYOK, gpt-5.3-codex)
+    SB->>Worker: receive message
+    Worker->>Cosmos: create container + seed sample records
+
+    Worker->>SDK: start session (AOAI BYOK, gpt-5.3-codex)
     SDK->>SDK: write main.py, Dockerfile, requirements.txt
 
     SDK->>ACR: [build_image] ACR remote build
@@ -148,6 +186,11 @@ sequenceDiagram
     SDK->>ACA: [smoke_test] GET /api/{resource}
     ACA-->>SDK: 200 OK
 
-    SDK-->>MCP: done
+    SDK-->>Worker: done
+    Worker->>State: update job (status: succeeded, api_base_url, ...)
+
+    Agent->>MCP: get_deployment_status(deployment_id)
+    MCP->>State: read job
+    State-->>MCP: job state
     MCP-->>Agent: deployment_id + api_base_url + endpoints
 ```

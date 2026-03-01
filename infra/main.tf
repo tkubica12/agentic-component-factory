@@ -293,6 +293,10 @@ resource "azurerm_container_app" "mcp_server" {
         name        = "MCP_API_KEY"
         secret_name = "mcp-api-key"
       }
+      env {
+        name  = "SERVICE_BUS_NAMESPACE"
+        value = "${azurerm_servicebus_namespace.main.name}.servicebus.windows.net"
+      }
     }
   }
 
@@ -306,5 +310,134 @@ resource "azurerm_container_app" "mcp_server" {
     azurerm_role_assignment.mi_acr_pull,
     azurerm_role_assignment.mi_openai_user,
     azurerm_role_assignment.mi_rg_contributor,
+    azurerm_role_assignment.mi_sb_sender,
+  ]
+}
+
+# ---------- Service Bus ----------
+resource "azurerm_servicebus_namespace" "main" {
+  name                          = "sb-mcpmock-${local.suffix}"
+  location                      = azurerm_resource_group.main.location
+  resource_group_name           = azurerm_resource_group.main.name
+  sku                           = "Standard"
+  local_auth_enabled            = false
+  public_network_access_enabled = true
+  tags                          = local.tags
+}
+
+resource "azurerm_servicebus_queue" "jobs" {
+  name         = "mock-api-jobs"
+  namespace_id = azurerm_servicebus_namespace.main.id
+}
+
+# MI: Service Bus Data Sender + Receiver
+resource "azurerm_role_assignment" "mi_sb_sender" {
+  scope                = azurerm_servicebus_namespace.main.id
+  role_definition_name = "Azure Service Bus Data Sender"
+  principal_id         = azurerm_user_assigned_identity.apps.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "mi_sb_receiver" {
+  scope                = azurerm_servicebus_namespace.main.id
+  role_definition_name = "Azure Service Bus Data Receiver"
+  principal_id         = azurerm_user_assigned_identity.apps.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# ---------- Worker Container App (KEDA scaling on SB queue) ----------
+resource "azurerm_container_app" "worker" {
+  name                         = "mcp-worker"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  resource_group_name          = azurerm_resource_group.main.name
+  revision_mode                = "Single"
+  tags                         = local.tags
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.apps.id]
+  }
+
+  template {
+    min_replicas = 3
+    max_replicas = 10
+
+    container {
+      name   = "worker"
+      image  = var.worker_image
+      cpu    = 2
+      memory = "4Gi"
+
+      env {
+        name  = "AZURE_SUBSCRIPTION_ID"
+        value = var.subscription_id
+      }
+      env {
+        name  = "AZURE_RESOURCE_GROUP"
+        value = azurerm_resource_group.main.name
+      }
+      env {
+        name  = "AZURE_LOCATION"
+        value = var.location
+      }
+      env {
+        name  = "COSMOS_ACCOUNT_NAME"
+        value = azurerm_cosmosdb_account.main.name
+      }
+      env {
+        name  = "COSMOS_ENDPOINT"
+        value = azurerm_cosmosdb_account.main.endpoint
+      }
+      env {
+        name  = "ACR_NAME"
+        value = azurerm_container_registry.main.name
+      }
+      env {
+        name  = "ACR_LOGIN_SERVER"
+        value = azurerm_container_registry.main.login_server
+      }
+      env {
+        name  = "ACA_ENVIRONMENT_NAME"
+        value = azurerm_container_app_environment.main.name
+      }
+      env {
+        name  = "MANAGED_IDENTITY_ID"
+        value = azurerm_user_assigned_identity.apps.id
+      }
+      env {
+        name  = "MANAGED_IDENTITY_CLIENT_ID"
+        value = azurerm_user_assigned_identity.apps.client_id
+      }
+      env {
+        name  = "AZURE_OPENAI_ENDPOINT"
+        value = azurerm_cognitive_account.foundry.endpoint
+      }
+      env {
+        name  = "CODEX_MODEL"
+        value = azurerm_cognitive_deployment.codex.name
+      }
+      env {
+        name  = "AZURE_CLIENT_ID"
+        value = azurerm_user_assigned_identity.apps.client_id
+      }
+      env {
+        name  = "SERVICE_BUS_NAMESPACE"
+        value = "${azurerm_servicebus_namespace.main.name}.servicebus.windows.net"
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image,
+    ]
+  }
+
+  depends_on = [
+    azurerm_cosmosdb_sql_role_assignment.apps_mi,
+    azurerm_role_assignment.mi_acr_pull,
+    azurerm_role_assignment.mi_openai_user,
+    azurerm_role_assignment.mi_rg_contributor,
+    azurerm_role_assignment.mi_sb_receiver,
   ]
 }

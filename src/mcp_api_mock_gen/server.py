@@ -1,20 +1,24 @@
 """FastMCP server exposing create_mock_api, get_deployment_status, and delete_mock_api tools.
 
-Uses an async pattern: create_mock_api starts a background job and returns
-immediately with a deployment_id. Clients poll get_deployment_status until
-the job completes or fails.
+The server is lightweight — it enqueues work to Azure Service Bus and tracks
+state in CosmosDB. A separate worker process handles the heavy codegen pipeline.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
+import uuid
 from typing import Any
 
+from azure.identity.aio import DefaultAzureCredential
+from azure.servicebus.aio import ServiceBusClient
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+
+from .config import Settings
+from .state import create_job, delete_job, get_job
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -31,8 +35,21 @@ mcp = FastMCP(
     ),
 )
 
-# In-memory job store (deployment_id -> status dict)
-_jobs: dict[str, dict[str, Any]] = {}
+_QUEUE_NAME = "mock-api-jobs"
+
+
+async def _send_to_service_bus(namespace: str, message: dict[str, Any]) -> None:
+    """Send a JSON message to the Service Bus queue."""
+    credential = DefaultAzureCredential()
+    try:
+        async with ServiceBusClient(fully_qualified_namespace=namespace, credential=credential) as sb_client:
+            sender = sb_client.get_queue_sender(queue_name=_QUEUE_NAME)
+            async with sender:
+                from azure.servicebus import ServiceBusMessage
+                sb_msg = ServiceBusMessage(json.dumps(message))
+                await sender.send_messages(sb_msg)
+    finally:
+        await credential.close()
 
 
 @mcp.tool()
@@ -44,8 +61,8 @@ async def create_mock_api(
 ) -> dict:
     """Start creating a CRUD REST API from sample data. Returns immediately.
 
-    This starts a background deployment. Poll get_deployment_status with the
-    returned deployment_id to check progress.
+    This enqueues a background deployment job. Poll get_deployment_status with
+    the returned deployment_id to check progress.
 
     Args:
         name: Resource name for the API (e.g. 'products', 'users').
@@ -55,48 +72,22 @@ async def create_mock_api(
     """
     logger.info("create_mock_api called: name=%s, records=%d, record_count=%d", name, len(sample_records), record_count)
 
-    # Generate deployment_id immediately — no imports, no I/O
-    import uuid
+    settings = Settings.from_env()
     deployment_id = str(uuid.uuid4())[:8]
 
-    # Store initial status
-    _jobs[deployment_id] = {
+    # Create job record in CosmosDB
+    create_job(settings.cosmos_endpoint, deployment_id, name)
+
+    # Send message to Service Bus for worker processing
+    message = {
         "deployment_id": deployment_id,
-        "status": "running",
-        "resource_name": name,
-        "api_base_url": None,
-        "cosmos_database": None,
-        "cosmos_container": None,
-        "container_app_name": None,
-        "endpoints": [],
-        "records_seeded": 0,
-        "records_generated": 0,
-        "error": None,
+        "name": name,
+        "sample_records": sample_records,
+        "record_count": record_count,
+        "data_description": data_description,
     }
-
-    # Start background task (all heavy work happens here)
-    async def _run():
-        try:
-            from .codegen import run_codegen
-            from .config import Settings
-            settings = Settings.from_env()
-            result = await run_codegen(name, sample_records, settings, record_count, data_description, deployment_id)
-            _jobs[deployment_id].update({
-                "status": result["status"],
-                "api_base_url": result.get("api_base_url"),
-                "cosmos_database": result.get("cosmos_database"),
-                "cosmos_container": result.get("cosmos_container"),
-                "container_app_name": result.get("container_app_name"),
-                "endpoints": result.get("endpoints", []),
-                "records_seeded": result.get("records_seeded", 0),
-                "records_generated": result.get("records_generated", 0),
-                "error": result.get("error"),
-            })
-        except Exception as e:
-            logger.exception("Background job %s failed", deployment_id)
-            _jobs[deployment_id].update({"status": "failed", "error": str(e)})
-
-    asyncio.create_task(_run())
+    await _send_to_service_bus(settings.service_bus_namespace, message)
+    logger.info("Job %s enqueued to Service Bus", deployment_id)
 
     return {"deployment_id": deployment_id, "status": "running"}
 
@@ -110,7 +101,8 @@ async def get_deployment_status(deployment_id: str) -> dict:
     Args:
         deployment_id: The deployment_id returned by create_mock_api.
     """
-    job = _jobs.get(deployment_id)
+    settings = Settings.from_env()
+    job = get_job(settings.cosmos_endpoint, deployment_id)
     if not job:
         return {"deployment_id": deployment_id, "status": "not_found", "error": "Unknown deployment_id"}
     return job
@@ -125,7 +117,6 @@ async def delete_mock_api(deployment_id: str) -> dict:
     Args:
         deployment_id: The deployment_id returned by create_mock_api.
     """
-    from .config import Settings
     from .skills.az_helpers import az_async
     from .skills.container_apps import ContainerAppsSkills
     from .skills.cosmos import CosmosSkills
@@ -171,8 +162,8 @@ async def delete_mock_api(deployment_id: str) -> dict:
     except Exception as e:
         errors.append(f"Cosmos container deletion: {e}")
 
-    # Clean up job store
-    _jobs.pop(deployment_id, None)
+    # Clean up job state
+    delete_job(settings.cosmos_endpoint, deployment_id)
 
     status = "failed" if errors else "succeeded"
     error = "; ".join(errors) if errors else None

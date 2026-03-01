@@ -25,7 +25,7 @@ Teams prototyping with AI need mock APIs quickly. Building CRUD backends, creati
 
 ### `create_mock_api`
 
-Azure infrastructure config is read from server-side env vars — callers only supply data.
+Azure infrastructure config is read from server-side env vars — callers only supply data. The MCP server writes job state to CosmosDB and sends a message to Service Bus. A Worker processes the job asynchronously.
 
 **Input**
 
@@ -36,6 +36,13 @@ Azure infrastructure config is read from server-side env vars — callers only s
 | `record_count` | `int` | no | Synthetic records to generate (default: 0) |
 | `data_description` | `str` | no | Natural language guidance for data generation |
 
+**Output** — `deployment_id`, `status: "running"`. Poll `get_deployment_status` for results.
+
+### `get_deployment_status`
+
+Reads job state from CosmosDB "jobs" container. Poll until `status` is `"succeeded"` or `"failed"`.
+
+**Input** — `deployment_id: str`
 **Output** — `deployment_id`, `api_base_url`, `endpoints`, `records_seeded`, `records_generated`, `status`, `error`.
 
 ### `delete_mock_api`
@@ -75,10 +82,12 @@ Integrated into `create_mock_api` via `record_count` and `data_description` para
 
 ## Deployment Behavior
 
+- MCP server writes job state to CosmosDB "jobs" container and sends a message to Service Bus queue `mock-api-jobs`.
+- Worker picks up the message, runs the Copilot SDK, and writes results back to CosmosDB state.
 - Docker image built via ACR remote build (`az acr build --no-logs`).
 - One Container App per API: 0.25 vCPU, 0.5Gi, external ingress, user-assigned MI.
 - Deployment ID: 8-char UUID4 prefix.
-- Smoke test (HTTP GET with retries) verifies 200 OK before returning.
+- Smoke test (HTTP GET with retries) verifies 200 OK before marking succeeded.
 
 ## Non-Functional Requirements
 

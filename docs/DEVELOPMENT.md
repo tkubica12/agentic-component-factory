@@ -42,30 +42,45 @@ uv run python run_server.py
 MCP_URL=http://localhost:8000/mcp uv run python tests/test_remote.py
 ```
 
+### Worker (Service Bus listener)
+
+```bash
+uv run python run_worker.py
+```
+
+The worker connects to Service Bus, listens for messages on the `mock-api-jobs` queue, and processes jobs using the Copilot SDK.
+
 ## Building the Docker image
 
 ### Build locally
 
 ```bash
+# MCP server
 docker build -t mcp-api-mock-gen .
+# Worker
+docker build -f Dockerfile.worker -t mcp-api-mock-gen-worker .
 ```
 
 ### Build via ACR
 
 ```bash
 az acr build --registry YOUR_ACR_NAME --image mcp-api-mock-gen:latest .
+az acr build --registry YOUR_ACR_NAME --image mcp-api-mock-gen-worker:latest -f Dockerfile.worker .
 ```
 
 ### Push to GHCR (done automatically by GitHub Actions)
 
-The `.github/workflows/build.yml` workflow builds and pushes to
-`ghcr.io/tkubica12/mcp-api-mock-gen:latest` on every push to `main`.
+The `.github/workflows/build.yml` workflow builds and pushes both images on every push to `main`:
+- `ghcr.io/tkubica12/mcp-api-mock-gen:latest` (server)
+- `ghcr.io/tkubica12/mcp-api-mock-gen-worker:latest` (worker)
 
 ## Project structure
 
 ```
 src/mcp_api_mock_gen/
-  server.py           FastMCP server with create_mock_api + delete_mock_api
+  server.py           FastMCP server with create_mock_api + delete_mock_api (lightweight)
+  state.py             CosmosDB job state read/write (jobs container)
+  worker.py            Worker: Service Bus listener, runs Copilot SDK per message
   codegen.py           Copilot SDK orchestration, prompts, tool wiring
   config.py            Settings from environment variables
   contracts.py         Pydantic models for MCP I/O
@@ -80,8 +95,13 @@ tests/
   test_client.py       In-process E2E test (stdio)
   test_remote.py       Remote E2E test (StreamableHTTP)
 
-infra/                 Terraform for all shared infrastructure + MCP server
-run_server.py          Entrypoint for Docker container
+infra/                 Terraform for all shared infrastructure + MCP server + Worker
+run_server.py          MCP server entrypoint
+run_worker.py          Worker entrypoint
+Dockerfile             MCP server image
+Dockerfile.worker      Worker image
+entrypoint.sh          MCP server container entrypoint script
+entrypoint_worker.sh   Worker container entrypoint script
 ```
 
 ## Environment variables
@@ -98,6 +118,7 @@ See `.env.example` for the full list. Key variables:
 | `MANAGED_IDENTITY_ID` / `CLIENT_ID` | User-assigned MI for Entra auth |
 | `AZURE_OPENAI_ENDPOINT` | AI Foundry endpoint for code gen + data gen |
 | `CODEX_MODEL` | Model deployment name (default: `gpt-53-codex`) |
+| `SERVICE_BUS_NAMESPACE` | Service Bus namespace (e.g. `myns.servicebus.windows.net`) |
 | `MCP_API_KEY` | API key for remote MCP endpoint protection |
 
 ## Testing

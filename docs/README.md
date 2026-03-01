@@ -16,24 +16,28 @@ data description, then delivers a fully deployed CRUD REST API backed by
 CosmosDB with realistic generated data. The AI agent calling the MCP gets back a
 live URL it can immediately wire into the UI it is building.
 
-Under the hood the MCP server uses the GitHub Copilot SDK (running against your
-own Azure OpenAI model -- no GitHub login required) to write the API code and
-data generation scripts. If the generated code has issues, the SDK
-self-corrects. Purpose-built tools let the SDK build Docker images, deploy
-containers, run scripts, and verify the result -- all in an autonomous loop.
+Under the hood a lightweight MCP server accepts requests, writes job state to
+CosmosDB, and sends a message to a Service Bus queue. A separate Worker service
+picks up the message and runs the GitHub Copilot SDK (Azure OpenAI BYOK -- no
+GitHub login required) to write API code and data generation scripts. If the
+generated code has issues, the SDK self-corrects. Purpose-built tools let the
+SDK build Docker images, deploy containers, run scripts, and verify the
+result -- all in an autonomous loop.
 
 ## How it works
 
 ```mermaid
 flowchart LR
     Agent["Copilot CLI<br>or any MCP client"]
-    MCP["MCP Server"]
+    MCP["MCP Server<br><i>(lightweight)</i>"]
+    SB[["Service Bus<br>queue"]]
+    State[("CosmosDB<br>jobs container")]
     Cosmos[("CosmosDB")]
     ACR["Container<br>Registry"]
     AOAI["Azure OpenAI"]
     ACA["Container<br>Apps"]
 
-    subgraph SDK ["GitHub Copilot SDK (gpt-5.3-codex)"]
+    subgraph Worker ["Worker (GitHub Copilot SDK, gpt-5.3-codex)"]
         direction TB
         Writes["Writes code<br><i>main.py, Dockerfile,<br>requirements.txt,<br>generate_data.py</i>"]
         Tools["Uses tools<br><i>build_image<br>run_script<br>create_container_app<br>smoke_test</i>"]
@@ -42,8 +46,10 @@ flowchart LR
     end
 
     Agent -- "create_mock_api()" --> MCP
-    MCP -- "seed sample data" --> Cosmos
-    MCP -- "start session" --> SDK
+    MCP -- "write job" --> State
+    MCP -- "send message" --> SB
+    SB -- "receive" --> Worker
+    MCP -- "poll status" --> State
 
     Tools -- "build_image:<br>Docker build" --> ACR
     Tools -- "run_script: generate_data.py<br>generate + insert records" --> AOAI
@@ -51,14 +57,16 @@ flowchart LR
     Tools -- "create_container_app:<br>deploy API" --> ACA
     Tools -- "smoke_test:<br>GET /api/..." --> ACA
 
+    Worker -- "update state" --> State
     MCP -- "deployment_id +<br>api_base_url" --> Agent
 ```
 
-The Copilot SDK does two things: it **writes code** (API server, Dockerfile,
-data generation script) and it **calls tools** to execute that code against
-Azure services. The `run_script` tool runs `generate_data.py` which calls
-Azure OpenAI to generate records and inserts them directly into CosmosDB.
-If any step fails, the SDK reads the error, fixes the code, and retries.
+The MCP server is lightweight — it writes job state to a CosmosDB "jobs"
+container, sends a message to Service Bus, and serves poll requests. The Worker
+receives the message and runs the Copilot SDK, which **writes code** and
+**calls tools** to build images, generate data, deploy containers, and smoke
+test. Results are written back to CosmosDB state. If any step fails, the SDK
+reads the error, fixes the code, and retries.
 
 ## Quick start
 
@@ -76,12 +84,14 @@ This creates everything in one step:
 
 | Resource | Purpose |
 |---|---|
-| CosmosDB serverless | Data store for generated APIs (Entra-only) |
+| CosmosDB serverless | Data store for generated APIs + job state (Entra-only) |
+| Service Bus (Standard) | Queue `mock-api-jobs` between MCP server and Worker (Entra auth) |
 | Container Registry | Builds Docker images for each API |
-| Container Apps Environment | Hosts generated APIs and the MCP server |
+| Container Apps Environment | Hosts generated APIs, MCP server, and Worker |
 | AI Foundry + gpt-5.3-codex | Powers code generation and data synthesis |
 | User-assigned managed identity | Entra auth across all services |
-| **MCP server Container App** | The MCP endpoint itself |
+| **MCP server Container App** | Lightweight MCP endpoint (1 replica, with ingress) |
+| **Worker Container App** | Runs Copilot SDK + codegen (3-10 replicas, KEDA scaling, no ingress) |
 
 Terraform outputs your MCP endpoint:
 
@@ -163,7 +173,10 @@ Deletes the Container App and CosmosDB container.
 
 | Component | Technology |
 |---|---|
-| MCP server | FastMCP, StreamableHTTP transport |
+| MCP server | FastMCP, StreamableHTTP transport (lightweight, no SDK) |
+| Worker | Copilot SDK + all skills, scales via KEDA on Service Bus queue depth |
+| Messaging | Azure Service Bus Standard, queue `mock-api-jobs`, Entra auth |
+| Job state | CosmosDB "jobs" container |
 | Code generation | GitHub Copilot SDK, Azure OpenAI BYOK (gpt-5.3-codex) |
 | API hosting | Azure Container Apps |
 | Image build | Azure Container Registry (ACR remote build) |
