@@ -1,12 +1,27 @@
-# MCP API mock generator
+# Agentic Component Factory
 
-MCP server that creates live CRUD REST APIs with realistic synthetic data from just a resource name and example records.
+From prompt to running software component.
 
-Point your AI agent at it, describe what data you need, and get back a deployed API endpoint in minutes.
+## Vision
 
-## Get started
+Move beyond static templates toward specialized agent systems that can build,
+deploy, and validate real software components end to end. The goal is a
+component catalog where a coding agent designing an overall solution can select
+a capability, delegate execution, and receive a ready-to-integrate running
+interface.
 
-See **[docs/README.md](docs/README.md)** for setup and usage instructions.
+In other words: coding agents orchestrate the product, while the Agentic
+Component Factory executes component delivery using specialized agents.
+
+## Current capability: API mock generator
+
+This repository implements the first capability in that vision: an MCP-based
+mock API generator that creates live CRUD REST APIs with realistic synthetic
+data and deploys them to cloud infrastructure.
+
+You provide a resource name and example records. The system generates code,
+seeds data, deploys the API, and returns a live endpoint for immediate use by
+the calling coding agent.
 
 ## Documentation
 

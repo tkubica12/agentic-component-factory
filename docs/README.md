@@ -2,19 +2,24 @@
 
 ## The problem
 
-When prototyping or developing software you constantly need mock data and APIs.
-You need records in a specific structure, stored in a database, with CRUD
-endpoints on top, and ideally some realistic synthetic data to showcase your
-idea or test your UI. Setting this up manually is slow and repetitive --
-especially when an AI agent is building your prototype and needs multiple APIs
-at once.
+When prototyping or developing software, teams repeatedly need common software
+components: APIs, data stores, event pipelines, integration adapters, and
+other building blocks. In a world where AI agents help write applications,
+these components are still too often delivered as design-time templates.
+
+Template catalogs (for example, Backstage-style component templates) are great
+for consistency, but they still leave substantial execution work: generate
+code, create data, provision cloud resources, deploy, and validate. That makes
+delivery slow and repetitive and forces the main coding agent to spend time on
+infrastructure-heavy setup instead of architecture and integration.
 
 ## The solution
 
-An MCP server that takes a resource name, a few example records, and an optional
-data description, then delivers a fully deployed CRUD REST API backed by
-CosmosDB with realistic generated data. The AI agent calling the MCP gets back a
-live URL it can immediately wire into the UI it is building.
+This project implements one specialized component factory: an MCP tool that
+takes a resource name, example records, and an optional data description, then
+delivers a fully deployed CRUD REST API backed by CosmosDB with realistic
+generated data. The calling AI agent gets back a live URL it can immediately
+wire into the application it is building.
 
 Under the hood a lightweight MCP server accepts requests, writes job state to
 CosmosDB, and sends a message to a Service Bus queue. A separate Worker service
@@ -23,6 +28,26 @@ GitHub login required) to write API code and data generation scripts. If the
 generated code has issues, the SDK self-corrects. Purpose-built tools let the
 SDK build Docker images, deploy containers, run scripts, and verify the
 result -- all in an autonomous loop.
+
+## Broader vision
+
+The long-term direction is a catalog of specialized agentic component systems,
+each exposed via MCP. Instead of selecting only a static template, the main AI
+agent can pick a capability and delegate full execution to a specialist agent
+system that returns a ready-to-use interface.
+
+In that model:
+
+- A **planner/integration agent** focuses on product architecture and how
+  components fit together.
+- A **specialist component agent system** handles code generation, synthetic
+  data generation, cloud provisioning, deployment, and smoke validation for one
+  component type.
+- The result is a **running component with integration contract** (URL, schema,
+  credentials/identity assumptions, and health signal), not just source files.
+
+`mcp-api-mock-gen` is the first concrete capability in this direction: a mock
+API generator with autonomous deployment and data seeding.
 
 ## How it works
 
