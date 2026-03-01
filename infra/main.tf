@@ -359,8 +359,18 @@ resource "azurerm_container_app" "worker" {
   }
 
   template {
-    min_replicas = 3
+    min_replicas = 0
     max_replicas = 10
+
+    custom_scale_rule {
+      name             = "servicebus-queue-rule"
+      custom_rule_type = "azure-servicebus"
+      metadata = {
+        queueName    = azurerm_servicebus_queue.jobs.name
+        namespace    = azurerm_servicebus_namespace.main.name
+        messageCount = "1"
+      }
+    }
 
     container {
       name   = "worker"
