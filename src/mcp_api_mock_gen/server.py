@@ -72,6 +72,20 @@ async def create_mock_api(
     """
     logger.info("create_mock_api called: name=%s, records=%d, record_count=%d", name, len(sample_records), record_count)
 
+    # Validate inputs early
+    if not name or not name.strip():
+        return {"error": "name must be a non-empty string", "status": "failed"}
+    if not sample_records:
+        return {"error": "sample_records must contain at least one record", "status": "failed"}
+    for i, rec in enumerate(sample_records):
+        if not isinstance(rec, dict):
+            return {"error": f"sample_records[{i}] must be a JSON object", "status": "failed"}
+
+    # Coerce id fields to strings (CosmosDB requirement)
+    for rec in sample_records:
+        if "id" in rec:
+            rec["id"] = str(rec["id"])
+
     settings = Settings.from_env()
     deployment_id = str(uuid.uuid4())[:8]
 

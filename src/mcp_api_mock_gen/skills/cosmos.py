@@ -83,6 +83,8 @@ class CosmosSkills:
         for record in records:
             if "id" not in record:
                 record["id"] = str(_uuid.uuid4())
+            else:
+                record["id"] = str(record["id"])  # CosmosDB requires id to be a string
             container.upsert_item(record)
             count += 1
         logger.info("Seeded %d records into %s/%s", count, database_name, container_name)
