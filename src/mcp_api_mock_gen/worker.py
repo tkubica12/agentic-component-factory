@@ -79,15 +79,23 @@ async def run_worker() -> None:
     credential = DefaultAzureCredential()
 
     async with ServiceBusClient(fully_qualified_namespace=namespace, credential=credential) as sb_client:
-        receiver = sb_client.get_queue_receiver(queue_name=_QUEUE_NAME)
+        receiver = sb_client.get_queue_receiver(
+            queue_name=_QUEUE_NAME,
+            max_lock_renewal_duration=900,  # 15 min lock renewal for long-running jobs
+        )
         async with receiver:
             logger.info("Listening on queue '%s' at %s", _QUEUE_NAME, namespace)
             async for msg in receiver:
+                deployment_id = None
                 try:
                     body = json.loads(str(msg))
+                    deployment_id = body.get("deployment_id")
                     await _process_message(body, settings)
-                    await receiver.complete_message(msg)
-                    logger.info("Message completed for job %s", body.get("deployment_id"))
                 except Exception:
-                    logger.exception("Failed to process message, dead-lettering")
-                    await receiver.dead_letter_message(msg, reason="ProcessingFailed")
+                    logger.exception("Failed to process message (deployment=%s)", deployment_id)
+                # Always complete the message — errors are recorded in CosmosDB state
+                try:
+                    await receiver.complete_message(msg)
+                    logger.info("Message completed for job %s", deployment_id)
+                except Exception:
+                    logger.warning("Failed to complete/dead-letter message for %s (lock may have expired)", deployment_id)

@@ -57,13 +57,21 @@ def create_job(cosmos_endpoint: str, deployment_id: str, resource_name: str) -> 
 
 
 def update_job(cosmos_endpoint: str, deployment_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
-    """Merge fields into an existing job document."""
+    """Merge fields into an existing job document. Won't overwrite terminal states with progress states."""
     container = _get_container(cosmos_endpoint)
     try:
         job = container.read_item(item=deployment_id, partition_key=deployment_id)
     except exceptions.CosmosResourceNotFoundError:
         logger.warning("Job %s not found for update", deployment_id)
         return None
+
+    # Don't overwrite terminal states (succeeded/failed) with progress states
+    current_status = job.get("status")
+    new_status = updates.get("status")
+    if current_status in ("succeeded", "failed") and new_status not in ("succeeded", "failed", None):
+        logger.info("Skipping status update %s -> %s for job %s (terminal state)", current_status, new_status, deployment_id)
+        return job
+
     job.update(updates)
     container.replace_item(item=deployment_id, body=job)
     logger.info("Updated job %s: %s", deployment_id, list(updates.keys()))
