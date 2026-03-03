@@ -211,3 +211,4 @@ infra/*.tfvars
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+presentations/~$AgenticComponentFactory.pptx

@@ -141,8 +141,8 @@ Open Copilot CLI and describe what you need:
 
 ```
 Build me an e-commerce dashboard with products, orders, and customers.
-Generate 50 products, 200 orders, and 30 customers with realistic data, no image links.
-Then create a React UI that displays everything. Run it for me, tell me how to access it.
+Generate APIs for 50 products, 200 orders, and 30 customers with realistic data, no image links.
+Then create a simple Javascript based UI that displays everything.
 ```
 
 Copilot will call the MCP server to spin up three live APIs with synthetic
@@ -156,6 +156,10 @@ ACR images that were created.
 ![](/images/acr.png)
 
 ![](/images/resources.png)
+
+![](/images/copilot_cli2.png)
+
+![](/images/result.png)
 
 ## MCP tools
 

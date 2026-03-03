@@ -82,6 +82,16 @@ def test_crud(base_url, resource, expected_min=3):
     check(f"GET list >= {expected_min}", len(items) >= expected_min, f"got {len(items)}")
     print(f"  INFO: {len(items)} records")
 
+    # Test query param filtering (limit/offset must not crash the API)
+    s, body = _http("GET", f"{url}?limit=2")
+    check("GET ?limit=2 returns 200", s == 200, f"got {s}")
+    if s == 200:
+        limited = json.loads(body)
+        check("GET ?limit=2 returns <= 2", len(limited) <= 2, f"got {len(limited)}")
+
+    s, body = _http("GET", f"{url}?limit=2&offset=1")
+    check("GET ?limit=2&offset=1 returns 200", s == 200, f"got {s}")
+
     s, body = _http("GET", f"{url}/1")
     check("GET /1 returns 200", s == 200, f"got {s}")
 

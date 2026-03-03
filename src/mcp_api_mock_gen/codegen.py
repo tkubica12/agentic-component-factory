@@ -74,10 +74,16 @@ IMPORTANT RULES - generate EXACTLY these files in the current working directory:
    - Use standard sync def for all endpoint handlers (not async def)
    - Implement endpoints:
      POST /api/{resource}         - Create record
-     GET  /api/{resource}         - List all (support exact-match query param filtering)
+     GET  /api/{resource}         - List all (support exact-match query param filtering and pagination)
      GET  /api/{resource}/{{id}}  - Get by id
      PATCH /api/{resource}/{{id}} - Partial update
      DELETE /api/{resource}/{{id}} - Delete
+   - For the GET list endpoint, handle "limit" and "offset" query params as PYTHON-SIDE pagination:
+     1. First query Cosmos DB for all matching items (using only field-filter WHERE clauses)
+     2. Then apply offset/limit via Python list slicing: items = items[offset:offset+limit]
+     Do NOT use Cosmos DB SQL OFFSET/LIMIT clauses — they require ORDER BY and cause BadRequest errors.
+   - IMPORTANT: Only use recognized field names from the schema as Cosmos DB query param filters.
+     Ignore any unknown query params (like limit, offset, page, per_page, etc.) when building the Cosmos DB SQL WHERE clause.
    - At the bottom: if __name__ == "__main__": uvicorn.run(app, host="0.0.0.0", port=8000)
 
 2. requirements.txt - EXACTLY these lines:
@@ -251,23 +257,32 @@ def _make_tools(cosmos: CosmosSkills, acr: AcrSkills, aca: ContainerAppsSkills, 
         import time, urllib.request, urllib.error
         a = call_info.get("arguments", {})
         url = a.get("url", "")
-        for attempt in range(3):
-            try:
-                req = urllib.request.Request(url, method="GET")
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    body = resp.read().decode("utf-8")[:1000]
-                    return json.dumps({"status": "ok", "http_status": resp.status, "body": body, "url": url})
-            except urllib.error.HTTPError as e:
-                body = e.read().decode("utf-8")[:1000] if e.fp else ""
-                if attempt < 2:
-                    time.sleep(15)
-                    continue
-                return json.dumps({"status": "error", "http_status": e.code, "body": body, "url": url, "message": f"HTTP {e.code}: {body}"})
-            except Exception as e:
-                if attempt < 2:
-                    time.sleep(15)
-                    continue
-                return json.dumps({"status": "error", "message": f"Smoke test failed: {e}", "url": url})
+        results = {}
+        # Test both plain list and with ?limit=2 to catch query param issues
+        for label, test_url in [("base", url), ("limit", url + ("&" if "?" in url else "?") + "limit=2")]:
+            for attempt in range(3):
+                try:
+                    req = urllib.request.Request(test_url, method="GET")
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        body = resp.read().decode("utf-8")[:1000]
+                        results[label] = {"status": "ok", "http_status": resp.status, "body": body, "url": test_url}
+                        break
+                except urllib.error.HTTPError as e:
+                    body = e.read().decode("utf-8")[:1000] if e.fp else ""
+                    if attempt < 2:
+                        time.sleep(15)
+                        continue
+                    results[label] = {"status": "error", "http_status": e.code, "body": body, "url": test_url, "message": f"HTTP {e.code}: {body}"}
+                except Exception as e:
+                    if attempt < 2:
+                        time.sleep(15)
+                        continue
+                    results[label] = {"status": "error", "message": f"Smoke test failed: {e}", "url": test_url}
+        # Return error if any test failed
+        for label, r in results.items():
+            if r.get("status") != "ok":
+                return json.dumps({"status": "error", "tests": results, "message": f"Smoke test '{label}' failed — the API must handle ?limit=N query params without errors. Fix the list endpoint to ignore unknown query params in Cosmos DB queries and apply limit/offset as Python-side list slicing."})
+        return json.dumps({"status": "ok", "tests": results})
 
     async def _run_script(call_info) -> str:
         try:
@@ -282,7 +297,7 @@ def _make_tools(cosmos: CosmosSkills, acr: AcrSkills, aca: ContainerAppsSkills, 
              parameters={"type": "object", "properties": {"image_tag": {"type": "string", "description": "Image name:tag"}, "code_directory": {"type": "string", "description": "Path to directory with Dockerfile"}}, "required": ["image_tag", "code_directory"]}),
         Tool(name="create_container_app", description="Create Azure Container App from ACR image.", handler=_create_container_app,
              parameters={"type": "object", "properties": {"app_name": {"type": "string"}, "image_tag": {"type": "string"}, "database_name": {"type": "string"}, "container_name": {"type": "string"}}, "required": ["app_name", "image_tag", "database_name", "container_name"]}),
-        Tool(name="smoke_test", description="HTTP GET to verify the API is accessible. Returns response body.", handler=_smoke_test,
+        Tool(name="smoke_test", description="HTTP GET to verify the API is accessible. Tests both plain GET and GET with ?limit=2. If the limit test fails, fix the list endpoint to handle limit/offset as Python-side slicing, not Cosmos SQL.", handler=_smoke_test,
              parameters={"type": "object", "properties": {"url": {"type": "string", "description": "Full URL to test"}}, "required": ["url"]}),
         Tool(name="run_script", description="Execute a Python script locally. Use this to run generate_data.py. Returns stdout/stderr.", handler=_run_script,
              parameters={"type": "object", "properties": {"script_path": {"type": "string", "description": "Name of the script file (e.g. generate_data.py)"}, "working_directory": {"type": "string", "description": "Directory containing the script"}}, "required": ["script_path", "working_directory"]}),
